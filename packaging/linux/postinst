@@ -1,0 +1,23 @@
+#!/bin/sh
+# Debian postinst for x32wingtool. Installs the menu entry directly (xdg-desktop-menu fails on
+# systems without a menu directory, which aborted jpackage's default script) and links the
+# x32wing command into /usr/bin.
+set -e
+
+case "$1" in
+    configure)
+        install -m 644 /opt/x32wingtool/lib/x32wingtool-X32WingTool.desktop /usr/share/applications/x32wingtool.desktop
+        if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database -q /usr/share/applications || true; fi
+        ln -sf /opt/x32wingtool/bin/x32wing /usr/bin/x32wing
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

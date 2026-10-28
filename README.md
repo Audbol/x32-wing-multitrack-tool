@@ -8,7 +8,7 @@
 
 [![Release](https://img.shields.io/github/v/release/Audbol/x32-wing-multitrack-tool?label=download&color=3B82F6)](https://github.com/Audbol/x32-wing-multitrack-tool/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Audbol/x32-wing-multitrack-tool/total?color=22C55E)](https://github.com/Audbol/x32-wing-multitrack-tool/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Java%2017%2B-555)](#download)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Java%2017%2B-555)](#download)
 [![License](https://img.shields.io/github/license/Audbol/x32-wing-multitrack-tool?color=555)](LICENSE)
 
 <img src="docs/screenshot-dark.png" alt="Main window, dark theme" width="900">
@@ -30,14 +30,24 @@ The X-Live take files are read as one continuous recording, so there are no gaps
 
 ## Download
 
-| | |
-|---|---|
-| **[Windows installer](https://github.com/Audbol/x32-wing-multitrack-tool/releases/latest)** `X32WingTool-x.y.z-Setup.exe` | Recommended. Includes its own Java runtime, so there's nothing else to install. Adds Start-menu and optional desktop shortcuts, can add the `x32wing` command to your PATH, and uninstalls cleanly. |
-| Portable zip `X32WingTool-x.y.z-portable-win64.zip` | The same app with nothing to install. Unzip and run `X32WingTool.exe`. |
-| Jar `X32WingTool-x.y.z.jar` | macOS and Linux, or any OS with Java 17+: `java -jar X32WingTool-x.y.z.jar` |
+All downloads are on the [latest release](https://github.com/Audbol/x32-wing-multitrack-tool/releases/latest) page.
+Every package includes its own Java runtime, so there's nothing else to install.
 
-The installer isn't code-signed yet, so Windows SmartScreen may warn on first run. Click **More info → Run anyway**.
-Every release includes `SHA256SUMS.txt` so you can verify the downloads.
+| System | File | |
+|---|---|---|
+| **Windows** 10/11, Server 2019+ | `X32WingTool-x.y.z-Setup.exe` | Installer (recommended). Adds Start-menu and optional desktop shortcuts, can add the `x32wing` command to your PATH, and uninstalls cleanly. |
+| Windows | `X32WingTool-x.y.z-portable-win64.zip` | No installation. Unzip and run `X32WingTool.exe`. |
+| **Ubuntu, Debian, Mint, Pop!_OS** | `x32wingtool_x.y.z_amd64.deb` | `sudo apt install ./x32wingtool_x.y.z_amd64.deb` |
+| **Fedora, RHEL, Alma, Rocky, openSUSE** | `x32wingtool-x.y.z-1.x86_64.rpm` | `sudo dnf install ./x32wingtool-x.y.z-1.x86_64.rpm` (openSUSE: `sudo zypper install …`) |
+| Any Linux (x86-64) | `X32WingTool-x.y.z-linux-x86_64.tar.gz` | No installation. Unpack and run `X32WingTool/bin/X32WingTool`. |
+| macOS or anything else | `X32WingTool-x.y.z.jar` | Needs Java 17+: `java -jar X32WingTool-x.y.z.jar` |
+
+On Linux, the `.deb` and `.rpm` add the app to your applications menu and put the `x32wing`
+command on your PATH. Uninstall with `sudo apt remove x32wingtool` or `sudo dnf remove x32wingtool`.
+
+The Windows installer and the Linux packages aren't signed yet. Windows SmartScreen may warn on
+first run: click **More info → Run anyway**. Every release includes `SHA256SUMS.txt` so you can
+verify the downloads.
 
 ## Quick start
 
@@ -76,11 +86,11 @@ Want named files? Click **Import names…** and choose your console scene (`.scn
 
 Built-in FLAC encoder and decoder: there's no ffmpeg to install. It converts about **80× realtime**
 from a local disk; reading straight off an SD card, the card reader is usually the limit.
-The app follows your Windows light/dark setting, or you can pick one under **View**.
+The app follows your system's light/dark setting (Windows, GNOME, KDE), or you can pick one under **View**.
 
 <div align="center">
-<img src="docs/screenshot-light.png" alt="Main window, light theme" width="49%">
-<img src="docs/screenshot-markers.png" alt="Markers" width="49%">
+<img src="docs/screenshot-light.png" alt="Main window, light theme (Windows)" width="49%">
+<img src="docs/screenshot-linux.png" alt="Main window on Linux" width="49%">
 </div>
 
 ## Command line
@@ -133,7 +143,9 @@ needs two reads; every other export needs one.
 
 ## Building from source
 
-You need a JDK 17+ (jpackage ships with it) and, for the installer, [Inno Setup 6](https://jrsoftware.org/isinfo.php).
+You need a JDK 17+ (jpackage ships with it).
+
+**Windows** (the installer also needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
 ```
 .\build.ps1             # dist\X32WingTool-<ver>.jar
@@ -142,7 +154,21 @@ You need a JDK 17+ (jpackage ships with it) and, for the installer, [Inno Setup 
 .\build.ps1 -Release    # everything + portable zip + SHA256SUMS.txt
 ```
 
-The build downloads FlatLaf from Maven Central on first run and checks it against a pinned SHA-256.
+**Linux**, natively or in WSL. Release packages are built on Ubuntu 22.04, so they also run on older systems:
+
+```
+sudo apt install openjdk-21-jdk fakeroot binutils rpm
+./build.sh              # dist/X32WingTool-<ver>.jar
+./build.sh --exe        # + dist/X32WingTool/  (self-contained app)
+./build.sh --release    # + .tar.gz, .deb, .rpm + SHA256SUMS.txt
+```
+
+`packaging/linux` overrides jpackage's defaults. It provides the menu entry and the `.deb` install
+and remove scripts, which add the `x32wing` command and the menu entry without `xdg-desktop-menu`
+(that tool fails on systems without a menu directory). It also provides an RPM spec that declares
+the runtime's library dependencies.
+
+Both builds download FlatLaf from Maven Central on first run and check it against a pinned SHA-256.
 The version number lives in `src/x32wing/Main.java`, and `tools/MakeIcon.java` generates the icon.
 
 ## Credits

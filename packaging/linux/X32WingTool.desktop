@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=X32 / WING Multitrack Tool
+GenericName=Multitrack Converter
+Comment=Convert Behringer X-Live and WING-LIVE card recordings to per-track FLAC or WAV
+Exec=/opt/x32wingtool/bin/X32WingTool
+Icon=/opt/x32wingtool/lib/X32WingTool.png
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=X32;M32;WING;Behringer;X-Live;multitrack;FLAC;WAV;
+StartupWMClass=x32wing-Main

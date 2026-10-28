@@ -82,11 +82,25 @@ final class Theme {
                 return out.contains("0x0");
             }
             if (os.contains("mac")) return run("defaults", "read", "-g", "AppleInterfaceStyle").trim().equalsIgnoreCase("dark");
+            // Linux / BSD: GTK_THEME override, GNOME 42+ colour scheme, GTK theme name, then KDE's colour scheme.
             String gtk = System.getenv("GTK_THEME");
-            return gtk != null && gtk.toLowerCase(Locale.ROOT).contains("dark");
+            if (gtk != null && !gtk.isBlank()) return gtk.toLowerCase(Locale.ROOT).contains("dark");
+            String scheme = tryRun("gsettings", "get", "org.gnome.desktop.interface", "color-scheme");
+            if (scheme.contains("prefer-dark")) return true;
+            if (scheme.contains("prefer-light")) return false;
+            if (tryRun("gsettings", "get", "org.gnome.desktop.interface", "gtk-theme").toLowerCase(Locale.ROOT).contains("dark")) return true;
+            java.nio.file.Path kde = java.nio.file.Path.of(System.getProperty("user.home"), ".config", "kdeglobals");
+            if (java.nio.file.Files.isReadable(kde))
+                for (String l : java.nio.file.Files.readAllLines(kde))
+                    if (l.startsWith("ColorScheme=")) return l.toLowerCase(Locale.ROOT).contains("dark");
+            return false;
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private static String tryRun(String... cmd) {
+        try { return run(cmd); } catch (Exception e) { return ""; }
     }
 
     private static String run(String... cmd) throws Exception {

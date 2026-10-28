@@ -12,11 +12,18 @@ The X32 / M32 / WING Multitrack Tool bundles the following software.
 FlatLaf provides the application's look and feel. Its license text is also included inside the
 application jar as `META-INF/LICENSE-FlatLaf.txt`.
 
-## Java runtime (installer and portable builds only)
+## Java runtime (installer and package builds only)
 
-The Windows installer and portable zip include a Java runtime created with `jpackage` from
-Oracle JDK 26, licensed under the Oracle No-Fee Terms and Conditions
-(https://www.oracle.com/downloads/licenses/no-fee-license.html).
+The packaged builds include a Java runtime created with `jpackage`/`jlink`:
+
+- **Windows** installer and portable zip: from Oracle JDK 26, licensed under the Oracle No-Fee
+  Terms and Conditions (https://www.oracle.com/downloads/licenses/no-fee-license.html).
+- **Linux** `.deb`, `.rpm` and `.tar.gz`: from OpenJDK 21 as packaged by Ubuntu, licensed under
+  the GNU General Public License, version 2, with the Classpath Exception
+  (https://openjdk.org/legal/gplv2+ce.html). The runtime's own legal notices are in
+  `lib/runtime/legal/`.
+
+The plain `.jar` contains no Java runtime.
 
 ## Acknowledgements
 

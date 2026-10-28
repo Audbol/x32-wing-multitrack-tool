@@ -48,7 +48,10 @@ final class Gui extends JFrame {
     private final Preferences prefs = PREFS;
 
     private final DefaultListModel<Session> sessions = new DefaultListModel<>();
-    private final JList<Session> sessionList = new JList<>(sessions);
+    private final JList<Session> sessionList = new JList<>(sessions) {
+        // Cards always fit the sidebar width; long labels are cut rather than scrolled sideways.
+        @Override public boolean getScrollableTracksViewportWidth() { return true; }
+    };
     private final JLabel sourceLabel = new JLabel();
     private final JLabel countLabel = new JLabel();
     private final JLabel sidebarTip = new JLabel("<html>Tip: Ctrl-click two recordings, then use<br>Tools › Combine for WING cards A + B.</html>");
@@ -266,6 +269,7 @@ final class Gui extends JFrame {
         sessionList.addListSelectionListener(e -> { if (!e.getValueIsAdjusting()) showSession(); });
         JScrollPane sp = sidebarScroll;
         sp.setBorder(null);
+        sp.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         sp.getViewport().setBackground(Theme.panelAlt());
         JLabel hint = sidebarTip;
         hint.putClientProperty(FlatClientProperties.STYLE, "font: -1; foreground: $Label.disabledForeground");
@@ -470,7 +474,7 @@ final class Gui extends JFrame {
         cols.setOpaque(false);
         GridBagConstraints g = new GridBagConstraints();
         g.anchor = GridBagConstraints.NORTHWEST;
-        g.insets = new Insets(0, 0, 0, 28);
+        g.insets = new Insets(0, 0, 0, 22);
         g.gridy = 0;
 
         g.gridx = 0; cols.add(section("FORMAT", row(format), row(dither)), g);
@@ -485,8 +489,19 @@ final class Gui extends JFrame {
         JButton openOut = new JButton(Icons.of(Icons.Kind.EXPORT));
         openOut.setToolTipText("Open output folder");
         openOut.addActionListener(e -> openFolder(Path.of(outDir.getText().trim())));
-        g.gridx = 3; g.weightx = 1; g.insets = new Insets(0, 0, 0, 0);
-        cols.add(section("OUTPUT", row(outDir, browse, openOut), row(reaper, markerFiles)), g);
+        // The folder field stretches and shrinks with the window, so wide fonts (e.g. DejaVu on Linux) never push the buttons off-screen.
+        JPanel outRow = new JPanel(new GridBagLayout());
+        outRow.setOpaque(false);
+        GridBagConstraints o = new GridBagConstraints();
+        o.fill = GridBagConstraints.HORIZONTAL; o.weightx = 1; o.insets = new Insets(0, 0, 0, 6);
+        outDir.setMinimumSize(new Dimension(120, outDir.getPreferredSize().height));
+        outRow.add(outDir, o);
+        o.fill = GridBagConstraints.NONE; o.weightx = 0;
+        outRow.add(browse, o);
+        o.insets = new Insets(0, 0, 0, 0);
+        outRow.add(openOut, o);
+        g.gridx = 3; g.weightx = 1; g.fill = GridBagConstraints.HORIZONTAL; g.insets = new Insets(0, 0, 0, 0);
+        cols.add(section("OUTPUT", outRow, row(reaper, markerFiles)), g);
 
         quickBtn.putClientProperty(FlatClientProperties.STYLE,
                 "background: $Component.accentColor; foreground: #ffffff; font: bold; margin: 7,18,7,18; borderWidth: 0; focusWidth: 0;"
@@ -1037,12 +1052,22 @@ final class Gui extends JFrame {
     private void openFolder(Path p) {
         try {
             Files.createDirectories(p);
-            Desktop.getDesktop().open(p.toFile());
+            desktopOpen(p.toString(), false);
         } catch (Exception e) { error("Could not open folder", e); }
     }
 
     private void browse(String url) {
-        try { Desktop.getDesktop().browse(java.net.URI.create(url)); } catch (Exception e) { error("Could not open browser", e); }
+        try { desktopOpen(url, true); } catch (Exception e) { error("Could not open browser", e); }
+    }
+
+    /** Opens a folder or URL with the desktop; falls back to xdg-open where AWT's Desktop is unsupported (many Linux desktops). */
+    private static void desktopOpen(String target, boolean url) throws IOException {
+        Desktop.Action a = url ? Desktop.Action.BROWSE : Desktop.Action.OPEN;
+        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(a)) {
+            if (url) Desktop.getDesktop().browse(java.net.URI.create(target)); else Desktop.getDesktop().open(new File(target));
+            return;
+        }
+        new ProcessBuilder("xdg-open", target).inheritIO().start();
     }
 
     private void about() {

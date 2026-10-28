@@ -1,0 +1,21 @@
+#!/bin/sh
+# Debian prerm for x32wingtool: removes what postinst added (an upgrade's postinst adds it back).
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        rm -f /usr/share/applications/x32wingtool.desktop
+        if [ -L /usr/bin/x32wing ]; then rm -f /usr/bin/x32wing; fi
+        if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database -q /usr/share/applications || true; fi
+    ;;
+
+    failed-upgrade)
+    ;;
+
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
