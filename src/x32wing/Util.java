@@ -39,6 +39,16 @@ final class Util {
         return Double.isInfinite(d) ? "silent" : String.format(Locale.ROOT, "%.1f dB", d);
     }
 
+    /** Shortens a path for display: keeps the root and the last two parts ("C:\…\X_LIVE\5D76955A"). */
+    static String shortPath(java.nio.file.Path p) {
+        if (p == null) return "";
+        int n = p.getNameCount();
+        if (n <= 3) return p.toString();
+        java.nio.file.Path root = p.getRoot();
+        String sep = p.getFileSystem().getSeparator();
+        return (root == null ? "" : root.toString()) + "…" + sep + p.subpath(n - 2, n);
+    }
+
     static String safeFileName(String s) {
         String r = s.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
         while (r.endsWith(".")) r = r.substring(0, r.length() - 1);

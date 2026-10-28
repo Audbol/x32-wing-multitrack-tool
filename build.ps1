@@ -18,13 +18,36 @@ $bin = Join-Path $jdk 'bin'
 
 function Check($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed" } }
 
+# FlatLaf (Apache-2.0) look and feel, pinned by version and SHA-256, fetched from Maven Central once.
+$flatlafVersion = '3.7.2'
+$flatlafSha256 = '917aff3963c88d797d0fd9b9ccbd70f7681c101df9d11c59e2bc7a3a6c0fabf4'
+$flatlaf = "lib\flatlaf-$flatlafVersion.jar"
+if (-not (Test-Path $flatlaf)) {
+    New-Item -ItemType Directory -Force lib | Out-Null
+    Write-Host "Downloading FlatLaf $flatlafVersion from Maven Central"
+    Invoke-WebRequest "https://repo1.maven.org/maven2/com/formdev/flatlaf/$flatlafVersion/flatlaf-$flatlafVersion.jar" -OutFile $flatlaf -UseBasicParsing
+}
+if ((Get-FileHash $flatlaf -Algorithm SHA256).Hash.ToLower() -ne $flatlafSha256) {
+    Remove-Item $flatlaf
+    throw "FlatLaf checksum mismatch - download deleted"
+}
+
 Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force build\classes\x32wing, build\jpkg, dist | Out-Null
+New-Item -ItemType Directory -Force build\classes\x32wing, build\jpkg, build\deps, dist | Out-Null
 $sources = Get-ChildItem src -Recurse -Filter *.java | ForEach-Object FullName
-& "$bin\javac.exe" --release 17 -encoding UTF-8 -Xlint:all,-serial -d build\classes $sources; Check 'javac'
+& "$bin\javac.exe" --release 17 -encoding UTF-8 -Xlint:all,-serial -cp $flatlaf -d build\classes $sources; Check 'javac'
 Copy-Item packaging\icon-512.png build\classes\x32wing\icon.png
+# Merge FlatLaf into one runnable jar (its module-info and manifest are dropped; licence kept).
+Push-Location build\deps
+& "$bin\jar.exe" --extract --file "..\..\$flatlaf"; Check 'unpack FlatLaf'
+Pop-Location
+Remove-Item build\deps\module-info.class, build\deps\META-INF\MANIFEST.MF -ErrorAction SilentlyContinue
+Get-ChildItem build\deps\META-INF\versions -Recurse -Filter module-info.class -ErrorAction SilentlyContinue | Remove-Item
+Move-Item build\deps\META-INF\LICENSE build\deps\META-INF\LICENSE-FlatLaf.txt
+Copy-Item -Recurse -Force build\deps\* build\classes\
+Set-Content build\manifest.txt "Multi-Release: true`r`nEnable-Native-Access: ALL-UNNAMED`r`nImplementation-Version: $version`r`n" -Encoding ascii
 $jar = "X32WingTool-$version.jar"
-& "$bin\jar.exe" --create --file "build\jpkg\X32WingTool.jar" --main-class x32wing.Main -C build\classes .; Check 'jar'
+& "$bin\jar.exe" --create --file "build\jpkg\X32WingTool.jar" --manifest build\manifest.txt --main-class x32wing.Main -C build\classes .; Check 'jar'
 Copy-Item build\jpkg\X32WingTool.jar "dist\$jar"
 Write-Host "Built dist\$jar"
 
@@ -33,7 +56,7 @@ if ($Exe) {
         --main-class x32wing.Main --dest dist --app-version $version --vendor Audbol `
         --description "X32 / M32 / WING multitrack tool" --icon packaging\app.ico `
         --add-launcher x32wing=packaging\cli-launcher.properties `
-        --java-options "-Xmx2g" --add-modules java.base,java.desktop,java.prefs
+        --java-options "-Xmx2g" --java-options "--enable-native-access=ALL-UNNAMED" --add-modules java.base,java.desktop,java.prefs
     Check 'jpackage'
     Write-Host "Built dist\X32WingTool\ (X32WingTool.exe = app, x32wing.exe = command line)"
 }

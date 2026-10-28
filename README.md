@@ -1,56 +1,91 @@
+<div align="center">
+
+<img src="packaging/icon-512.png" width="112" alt="App icon">
+
 # X32 / M32 / WING Multitrack Tool
 
-An all-in-one tool for the multitrack recordings made by Behringer X32/M32 (X-Live card) and
-WING (WING-LIVE card). It also works with any multichannel WAV, such as a DAW or USB recording.
-It's a single program with no dependencies: it has its own FLAC encoder and decoder, so you don't
-need ffmpeg or flac.exe.
+**Turn Behringer X-Live and WING-LIVE SD card recordings into clean, named per-track files in a single click.**
+
+[![Release](https://img.shields.io/github/v/release/Audbol/x32-wing-multitrack-tool?label=download&color=3B82F6)](https://github.com/Audbol/x32-wing-multitrack-tool/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Audbol/x32-wing-multitrack-tool/total?color=22C55E)](https://github.com/Audbol/x32-wing-multitrack-tool/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Java%2017%2B-555)](#download)
+[![License](https://img.shields.io/github/license/Audbol/x32-wing-multitrack-tool?color=555)](LICENSE)
+
+<img src="docs/screenshot-dark.png" alt="Main window, dark theme" width="900">
+
+</div>
+
+## Why
+
+The X32/M32 X-Live card and the WING-LIVE card record every input into a single multichannel
+32-bit WAV, chopped into 4 GB pieces. A three-hour show is about 70 GB in 17 files, with every
+unused input recorded as well. This tool turns that into what you actually want:
+
+- One **FLAC or WAV per instrument**, named like your console's channels.
+- The **unused channels left out**.
+- Levels **normalized** if you want them.
+- A **REAPER session** ready to mix, with the show's markers.
+
+The X-Live take files are read as one continuous recording, so there are no gaps or clicks between them.
 
 ## Download
 
-Get these from the [Releases](https://github.com/Audbol/x32-wing-multitrack-tool/releases) page:
-
 | | |
 |---|---|
-| `X32WingTool-<version>-Setup.exe` | **Windows installer** (recommended). Includes its own Java runtime, adds Start-menu and optional desktop shortcuts, can put the `x32wing` command on your PATH, and uninstalls cleanly. |
-| `X32WingTool-<version>-portable-win64.zip` | The same app with nothing to install. Unzip and run `X32WingTool.exe`. |
-| `X32WingTool-<version>.jar` | Any OS with Java 17+: `java -jar X32WingTool-<version>.jar` |
+| **[Windows installer](https://github.com/Audbol/x32-wing-multitrack-tool/releases/latest)** `X32WingTool-x.y.z-Setup.exe` | Recommended. Includes its own Java runtime, so there's nothing else to install. Adds Start-menu and optional desktop shortcuts, can add the `x32wing` command to your PATH, and uninstalls cleanly. |
+| Portable zip `X32WingTool-x.y.z-portable-win64.zip` | The same app with nothing to install. Unzip and run `X32WingTool.exe`. |
+| Jar `X32WingTool-x.y.z.jar` | macOS and Linux, or any OS with Java 17+: `java -jar X32WingTool-x.y.z.jar` |
 
-The installer isn't code-signed, so Windows SmartScreen may warn on first run. Click **More info → Run anyway**.
+The installer isn't code-signed yet, so Windows SmartScreen may warn on first run. Click **More info → Run anyway**.
+Every release includes `SHA256SUMS.txt` so you can verify the downloads.
 
-`X32WingTool.exe` opens the app; `x32wing.exe`, next to it, is the command-line version.
+## Quick start
 
-Open the SD card (or the `X_LIVE` folder, a session folder or a WAV file), or just drag it onto the
-window. Every recording found is listed with its date, name, channel count, length and markers.
+1. Put the SD card in your computer and start the app.
+2. Click **Open card or folder…** and pick the card. You can also drag it onto the window.
+3. Pick a recording, then click **Quick 16-bit FLAC**.
+
+Want named files? Click **Import names…** and choose your console scene (`.scn`) or snapshot
+(`.snap`). Want to skip the empty inputs? Tick **Remove silent channels**.
 
 ## Features
 
-**Quick 16-bit FLAC.** One click turns every channel of the selected recording(s) into its own
-16-bit FLAC with TPDF dither. A 32-channel show converts at about 80× realtime on this machine,
-so an hour takes under a minute; when reading straight off the SD card, the card reader is
-usually the bottleneck.
+<table>
+<tr><td width="50%" valign="top">
 
-**Export**, with every option:
-- Formats: FLAC 16/24-bit, WAV 16/24-bit, WAV 32-bit float. WAV switches to RF64 automatically when a file passes 4 GB.
-- **Normalize**, in two modes:
-  - *Each file to target*: every track peaks at the target level.
-  - *All files, same gain*: one gain is applied to every file, so the loudest track hits the target and the mix balance is kept.
-- **Remove silent channels**: any channel whose peak stays below the threshold (default −60 dBFS) is skipped and listed in the report. These are the unused inputs the card records anyway.
-- TPDF dither when reducing word length. Digital silence stays exactly silent, and samples that are already exact get no dither noise.
-- Pick channels, link stereo pairs (exported as one stereo file), and name channels.
-- Range: the whole recording, **split at markers** (one folder per song), or a custom time range.
-- Writes a **REAPER project** with every track and marker already laid out, CSV and Audacity marker lists, and an `export_report.txt` with the peak and gain of every file.
+**Export**
+- FLAC 16/24-bit or WAV 16/24/32-bit float. Files over 4 GB are written as RF64 automatically.
+- TPDF dither when reducing bit depth. Digital silence stays exactly silent.
+- **Normalize** each file to a target peak, or apply one gain to all files so the mix balance is kept.
+- **Remove silent channels** below a threshold you set, at no extra cost.
+- Stereo pairs, per-channel selection, split at markers (one folder per song), or any time range.
+- Writes a REAPER project, CSV and Audacity marker lists, and an export report.
 
-**Channel names** can be imported from an X32/M32 scene (`.scn`), a WING snapshot (`.snap`) or a
-text file with one name per line. The last-used names are remembered.
+</td><td width="50%" valign="top">
 
-**Session management**
-- Reads `SE_LOG.BIN`: session name, date, markers and take list. The many 4 GB take files play as one continuous recording.
-- Edit the session name and markers and save them back to the card. The original is kept as `SE_LOG.BIN.bak`.
-- **Combine recordings side by side**: for example WING card A (ch 1–32) plus card B (ch 33–64) into one 64-channel session.
-- **Repair unfinalized recordings**: takes left broken by pulling the card or losing power mid-show are read correctly, and *Tools → Repair* fixes their headers so other software can open them.
-- **Build a card session** from WAV or FLAC files (for example a FLAC archive) for Virtual Soundcheck. The 32-bit takes and `SE_LOG.BIN` are laid out the way the card writes them. Channels are padded to 8, 16 or 32, and you can set markers and a name.
+**Card management**
+- Reads `SE_LOG.BIN`: session name, date, markers and take list.
+- Edit the name and markers and save them back to the card, with a backup of the original.
+- Imports channel names from an X32/M32 scene, a WING snapshot or a text list.
+- **Combine WING card A and card B** into one 64-channel recording.
+- **Repair** recordings left unfinalized when the card was pulled or the power failed.
+- **Build a card session** from WAV or FLAC files for Virtual Soundcheck.
+
+</td></tr>
+</table>
+
+Built-in FLAC encoder and decoder: there's no ffmpeg to install. It converts about **80× realtime**
+from a local disk; reading straight off an SD card, the card reader is usually the limit.
+The app follows your Windows light/dark setting, or you can pick one under **View**.
+
+<div align="center">
+<img src="docs/screenshot-light.png" alt="Main window, light theme" width="49%">
+<img src="docs/screenshot-markers.png" alt="Markers" width="49%">
+</div>
 
 ## Command line
+
+The installer can put `x32wing` on your PATH. It's handy for batch jobs and scripts.
 
 ```
 x32wing scan E:\
@@ -64,9 +99,41 @@ x32wing selftest
 
 Run `x32wing help` for every option.
 
-## Building
+## Verified
 
-Needs a JDK 17+ (jpackage ships with it) and, for the installer, [Inno Setup 6](https://jrsoftware.org/isinfo.php).
+- **Real card:** an X32 X-Live recording (3h16m, 32 channels, 17 takes, 67.6 GB). Exports straddling
+  the take boundaries, and the final seconds of the show, are **bit-identical to the raw card data**,
+  checked with an independent reader.
+- **Independent decoder:** REAPER decodes the exported FLAC files bit-identically.
+- **Self-test:** `x32wing selftest` builds a 32-channel card session and checks every export option,
+  header repair, card rebuilding, `SE_LOG.BIN` editing and name import.
+
+## How the card format works
+
+X-Live sessions live in `X_LIVE\<8 hex digits>\`, and the folder name is the start date/time.
+Inside are the take files, **numbered in hex** (`…09.WAV`, `…0A.WAV` … `…0F.WAV`, `…10.WAV`).
+Each is 32-bit PCM with 8, 16 or 32 interleaved channels. Audio starts at byte 32768, and each
+take holds at most 0xFFFF0000 bytes of audio.
+
+`SE_LOG.BIN` (2048 bytes) holds:
+- session id, channel count and sample rate,
+- take count and the size of each of up to 256 takes,
+- total length,
+- up to 125 marker positions (in samples),
+- the session name, at byte offset 1552.
+
+The WING-LIVE card is assumed to use the same layout. Scanning doesn't depend on that, because
+every WAV header is read directly.
+
+Standard FLAC holds at most 8 channels per file, which is one reason exports are per track.
+
+**Speed tip:** with a slow card reader (the one tested here manages 18 MB/s, about an hour per
+3-hour show), copy the session folder to a local disk before a **normalized** export. Normalizing
+needs two reads; every other export needs one.
+
+## Building from source
+
+You need a JDK 17+ (jpackage ships with it) and, for the installer, [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 
 ```
 .\build.ps1             # dist\X32WingTool-<ver>.jar
@@ -75,37 +142,15 @@ Needs a JDK 17+ (jpackage ships with it) and, for the installer, [Inno Setup 6](
 .\build.ps1 -Release    # everything + portable zip + SHA256SUMS.txt
 ```
 
-The version number lives in `src/x32wing/Main.java`. The icon is generated by `tools/MakeIcon.java`.
+The build downloads FlatLaf from Maven Central on first run and checks it against a pinned SHA-256.
+The version number lives in `src/x32wing/Main.java`, and `tools/MakeIcon.java` generates the icon.
 
-## Verification
+## Credits
 
-`selftest` builds a 32-channel card session spread over 18 takes and checks it end to end:
-- 24-bit export is bit-exact.
-- 16-bit export rounds correctly, and dither stays within limits.
-- Stereo pairs, silent-channel removal, both normalize modes and split-at-markers.
-- WAV output, header repair, and rebuilding a card session from a FLAC archive (bit-identical).
-- `SE_LOG.BIN` editing, and scene/snapshot name import.
+- The `SE_LOG.BIN` layout comes from Patrick-Gilles Maillot's [X32 tools](https://github.com/pmaillot/X32-Behringer).
+- The look and feel is [FlatLaf](https://www.formdev.com/flatlaf/) (Apache-2.0). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- Behringer, X32, M32 and WING are trademarks of their respective owners. This project is not affiliated with or endorsed by Behringer.
 
-The FLAC output was also checked against REAPER's independent decoder: every file was bit-identical.
+## License
 
-It was also checked against a real X32 X-Live card: a 3h16m, 32-channel show in 17 takes, 67.6 GB.
-Exports straddling take boundaries, and the final seconds of the show, were bit-identical to the raw
-card data, read independently of the tool.
-
-**Speed tip:** reading off the SD card is usually the limit; the card reader tested here managed
-18 MB/s, which is about 1 hour per 3-hour show. Silent-channel removal costs nothing extra (one
-read), but **normalize needs two reads**. For normalized exports of long shows, copy the session
-folder to a local disk first.
-
-## Format notes
-
-X-Live sessions live in `X_LIVE\<8 hex digits>\`. The folder name is the start date/time, packed
-in FAT format. Inside are the takes, **numbered in hex** (`…09.WAV`, `…0A.WAV` … `…0F.WAV`, `…10.WAV`): 32-bit PCM with interleaved
-8, 16 or 32 channels, audio starting at offset 32768, and at most 0xFFFF0000 bytes of audio per
-take. `SE_LOG.BIN` is 2048 bytes: session id, channel count, sample rate, take count, marker count,
-total length, 256 take sizes, 125 marker sample positions, and the name at offset 1552. The layout
-comes from Patrick-Gilles Maillot's open-source X32 tools. The WING-LIVE card is assumed to use the
-same layout; scanning doesn't depend on that, because every WAV header is read directly.
-
-Standard FLAC holds at most 8 channels per file, which is one reason exports are per track
-(mono or stereo).
+[MIT](LICENSE)

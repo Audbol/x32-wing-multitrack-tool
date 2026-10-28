@@ -51,6 +51,7 @@ final class Cli {
             case "flac", "export" -> { return export(args, cmd.equals("flac")); }
             case "build" -> { return build(args); }
             case "repair" -> { return repair(args); }
+            case "screenshot" -> { return screenshot(args); }
             default -> { System.err.println("Unknown command: " + args[0] + "\n\n" + USAGE); return 2; }
         }
     }
@@ -206,6 +207,24 @@ final class Cli {
         Path dir = new XLiveBuilder().build(in, out, name, markers, consoleProgress());
         System.out.println("\nCard session written to " + dir);
         System.out.println("Copy the X_LIVE folder to the root of the SD card.");
+        return 0;
+    }
+
+    /** Hidden: screenshot <out.png> <source|-> [--names f] [--analyze] [--size WxH] [--tab n] [--theme light|dark|system] */
+    private static int screenshot(String[] a) throws Exception {
+        Path names = null; boolean analyze = false; int w = 1320, h = 860, tab = 0;
+        String theme = null;
+        for (int i = 3; i < a.length; i++) {
+            switch (a[i]) {
+                case "--names" -> names = Path.of(a[++i]);
+                case "--analyze" -> analyze = true;
+                case "--size" -> { String[] wh = a[++i].split("x"); w = Integer.parseInt(wh[0]); h = Integer.parseInt(wh[1]); }
+                case "--tab" -> tab = Integer.parseInt(a[++i]);
+                case "--theme" -> theme = a[++i];
+                default -> { }
+            }
+        }
+        Gui.screenshot(Path.of(a[1]), a[2].equals("-") ? null : Path.of(a[2]), names, analyze, w, h, tab, theme);
         return 0;
     }
 

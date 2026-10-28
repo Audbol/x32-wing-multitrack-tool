@@ -115,6 +115,7 @@ public final class Session {
     /** Finds every recording under root (an SD card, an X_LIVE folder, a session folder or a single WAV). */
     public static List<Session> scan(Path root, List<String> warnings) throws IOException {
         List<Session> out = new ArrayList<>();
+        if (!Files.exists(root)) throw new IOException("Not found: " + root + " (is the card inserted?)");
         if (Files.isRegularFile(root)) {
             Session s = fromSingle(root, warnings);
             if (s != null) out.add(s);

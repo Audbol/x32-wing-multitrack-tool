@@ -31,7 +31,7 @@ public final class ExportJob {
     }
 
     public enum Normalize {
-        NONE("Off"), PER_TRACK("Each file to target"), LINKED("All files, same gain (keeps balance)");
+        NONE("Off"), PER_TRACK("Each file"), LINKED("All files (linked)");
         public final String label;
         Normalize(String l) { label = l; }
         @Override public String toString() { return label; }
@@ -290,7 +290,7 @@ public final class ExportJob {
         ExportJob j = new ExportJob(new Spec(), p);
         ExecutorService reader = Executors.newSingleThreadExecutor(daemon("read"));
         try (AudioSource src = s.open()) {
-            return j.analyze(src, 0, s.frames, reader, f -> p.update("Analyzing levels", f / (double) Math.max(1, s.frames), ""));
+            return j.analyze(src, 0, s.frames, reader, f -> j.progress.update("Analyzing levels", f / (double) Math.max(1, s.frames), ""));
         } finally {
             reader.shutdownNow();
         }

@@ -1,21 +1,31 @@
 package x32wing;
 
+import com.formdev.flatlaf.FlatClientProperties;
+import com.formdev.flatlaf.FlatLaf;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.Image;
 import java.awt.Insets;
+import java.awt.RenderingHints;
 import java.awt.datatransfer.DataFlavor;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.File;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -25,102 +35,151 @@ import java.util.Map;
 import java.util.prefs.Preferences;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.border.MatteBorder;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.TableCellRenderer;
+import javax.swing.table.TableColumn;
 
-/** Swing front end. */
+/** Swing front end (FlatLaf). */
 final class Gui extends JFrame {
-    private static final String TITLE = "X32 / M32 / WING Multitrack Tool " + Main.VERSION;
-    private final Preferences prefs = Preferences.userNodeForPackage(Gui.class);
+    private static final String APP = "X32 / M32 / WING Multitrack Tool";
+    private static final Preferences PREFS = Preferences.userNodeForPackage(Gui.class);
+    private final Preferences prefs = PREFS;
 
     private final DefaultListModel<Session> sessions = new DefaultListModel<>();
     private final JList<Session> sessionList = new JList<>(sessions);
-    private final JLabel sourceLabel = new JLabel("Open an SD card, an X_LIVE folder or a WAV file — or drop it on this window.");
+    private final JLabel sourceLabel = new JLabel();
+    private final JLabel countLabel = new JLabel();
+    private final JLabel sidebarTip = new JLabel("<html>Tip: Ctrl-click two recordings, then use<br>Tools › Combine for WING cards A + B.</html>");
+    private JComponent exportBar;
+    private final JScrollPane sidebarScroll = new JScrollPane(sessionList);
     private final Map<Session, boolean[][]> selection = new HashMap<>(); // [0]=export, [1]=stereo with next
+
+    private final CardLayout mainCards = new CardLayout();
+    private final JPanel main = new JPanel(mainCards);
+    private final JLabel title = new JLabel(), subtitle = new JLabel();
+    private final JPanel chips = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
 
     private final ChannelModel chModel = new ChannelModel();
     private final JTable chTable = new JTable(chModel);
+    private final JLabel chSummary = new JLabel();
     private final MarkerModel mkModel = new MarkerModel();
     private final JTable mkTable = new JTable(mkModel);
-    private final JTextField sessionName = new JTextField(16);
-    private final JTextArea info = new JTextArea();
+    private final JTextField sessionName = new JTextField(18);
+    private final JPanel details = new JPanel(new GridBagLayout());
+    private final TakeModel takeModel = new TakeModel();
+    private final JTable takeTable = new JTable(takeModel);
+    private final JTabbedPane tabs = new JTabbedPane();
 
     private final JComboBox<ExportJob.Format> format = new JComboBox<>(ExportJob.Format.values());
     private final JCheckBox dither = new JCheckBox("TPDF dither", true);
-    private final JComboBox<String> range = new JComboBox<>(new String[] {"Whole recording", "Split at markers (folder per song)", "Custom range"});
-    private final JTextField rangeStart = new JTextField("0:00", 7), rangeEnd = new JTextField("", 7);
+    private final JComboBox<String> range = new JComboBox<>(new String[] {"Whole recording", "Split at markers", "Custom range"});
+    private final JTextField rangeStart = new JTextField("0:00", 6), rangeEnd = new JTextField("", 6);
     private final JComboBox<ExportJob.Normalize> normalize = new JComboBox<>(ExportJob.Normalize.values());
     private final JSpinner normDb = new JSpinner(new SpinnerNumberModel(-1.0, -40.0, 0.0, 0.5));
     private final JCheckBox removeSilent = new JCheckBox("Remove silent channels below");
     private final JSpinner silentDb = new JSpinner(new SpinnerNumberModel(-60.0, -120.0, -10.0, 1.0));
-    private final JTextField outDir = new JTextField(30);
+    private final JTextField outDir = new JTextField(26);
     private final JCheckBox reaper = new JCheckBox("REAPER project", true);
     private final JCheckBox markerFiles = new JCheckBox("Marker lists", true);
 
-    private final JButton exportBtn = new JButton("Export selected");
-    private final JButton quickBtn = new JButton("Quick 16-bit FLAC");
+    private final JButton exportBtn = new JButton("Export selected", Icons.of(Icons.Kind.EXPORT));
+    private final JButton quickBtn = new JButton("Quick 16-bit FLAC", new Icons(Icons.Kind.BOLT, 16, Color.WHITE));
     private final JButton cancelBtn = new JButton("Cancel");
     private final JProgressBar bar = new JProgressBar(0, 1000);
-    private final JLabel status = new JLabel(" ");
+    private final JLabel status = new JLabel("Ready");
     private final List<JComponent> busyDisabled = new ArrayList<>();
     private volatile boolean cancel;
     private boolean busy;
+    private Path lastSource;
+    private Theme.Mode themeMode;
 
     static void launch() {
         SwingUtilities.invokeLater(() -> {
-            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) { }
-            new Gui().setVisible(true);
+            Theme.Mode m = savedTheme();
+            Theme.apply(m);
+            Gui g = new Gui(m);
+            g.setVisible(true);
         });
     }
 
-    private Gui() {
-        super(TITLE);
+    private static Theme.Mode savedTheme() {
+        try { return Theme.Mode.valueOf(PREFS.get("theme", "SYSTEM")); } catch (IllegalArgumentException e) { return Theme.Mode.SYSTEM; }
+    }
+
+    /** Renders the window with a recording loaded to a PNG (for docs / design review). */
+    static void screenshot(Path out, Path source, Path names, boolean analyze, int width, int height, int tab, String theme) throws Exception {
+        Gui[] g = new Gui[1];
+        String[] th = theme == null ? new String[] {"system"} : theme.split(">"); // "light>dark" tests a live switch
+        Theme.Mode mode = Theme.Mode.valueOf(th[0].toUpperCase(Locale.ROOT));
+        Theme.Mode switchTo = th.length > 1 ? Theme.Mode.valueOf(th[1].toUpperCase(Locale.ROOT)) : null;
+        List<Session> found = source == null ? List.of() : Session.scan(source, new ArrayList<>());
+        if (!found.isEmpty()) {
+            Session s = found.get(found.size() - 1);
+            if (names != null) Cli.applyNames(s, NameImport.read(names));
+            if (analyze) s.peaks = ExportJob.analyzeSession(s, null);
+        }
+        SwingUtilities.invokeAndWait(() -> {
+            Theme.apply(mode);
+            g[0] = new Gui(mode);
+            g[0].setSize(width, height);
+            g[0].setLocation(0, 0);
+            g[0].setVisible(true);
+            if (source != null) g[0].showSessions(source, found);
+            if (!found.isEmpty()) g[0].sessionList.setSelectedIndex(found.size() - 1);
+            g[0].tabs.setSelectedIndex(tab);
+        });
+        if (switchTo != null) {
+            Thread.sleep(800);
+            SwingUtilities.invokeAndWait(() -> { g[0].themeMode = switchTo; g[0].reapplyTheme(); });
+        }
+        Thread.sleep(1500);
+        SwingUtilities.invokeAndWait(() -> {
+            JRootPane rp = g[0].getRootPane();
+            java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(rp.getWidth(), rp.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+            Graphics2D gr = img.createGraphics();
+            rp.paint(gr);
+            gr.dispose();
+            try { javax.imageio.ImageIO.write(img, "png", out.toFile()); } catch (IOException e) { throw new RuntimeException(e); }
+            g[0].dispose();
+        });
+    }
+
+    private Gui(Theme.Mode mode) {
+        super(APP);
+        themeMode = mode;
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         java.net.URL icon = Gui.class.getResource("icon.png");
-        if (icon != null) setIconImage(new ImageIcon(icon).getImage());
+        if (icon != null) {
+            Image img = new ImageIcon(icon).getImage();
+            setIconImages(List.of(img.getScaledInstance(16, 16, Image.SCALE_SMOOTH), img.getScaledInstance(32, 32, Image.SCALE_SMOOTH),
+                    img.getScaledInstance(64, 64, Image.SCALE_SMOOTH), img));
+        }
         setJMenuBar(menu());
+        getRootPane().putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_ICON, true);
 
-        JPanel top = new JPanel(new BorderLayout(8, 0));
-        top.setBorder(new EmptyBorder(8, 8, 4, 8));
-        JButton open = new JButton("Open card / folder…");
-        open.addActionListener(e -> chooseSource());
-        JButton rescan = new JButton("Rescan");
-        rescan.addActionListener(e -> rescan());
-        JPanel tb = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        tb.add(open); tb.add(rescan);
-        top.add(tb, BorderLayout.WEST);
-        sourceLabel.setForeground(Color.GRAY);
-        top.add(sourceLabel, BorderLayout.CENTER);
-        busyDisabled.add(open); busyDisabled.add(rescan);
-
-        sessionList.setCellRenderer(new SessionRenderer());
-        sessionList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
-        sessionList.addListSelectionListener(e -> { if (!e.getValueIsAdjusting()) showSession(); });
-        JScrollPane left = new JScrollPane(sessionList);
-        left.setPreferredSize(new Dimension(300, 400));
-        left.setBorder(BorderFactory.createTitledBorder("Recordings"));
-
-        JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("Channels", channelsTab());
-        tabs.addTab("Markers", markersTab());
-        info.setEditable(false);
-        info.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        tabs.addTab("Info", new JScrollPane(info));
-
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, tabs);
-        split.setResizeWeight(0.25);
-        split.setBorder(new EmptyBorder(0, 8, 0, 8));
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar(), mainArea());
+        split.setDividerLocation(300);
+        split.setBorder(null);
+        split.setContinuousLayout(true);
 
         JPanel root = new JPanel(new BorderLayout());
-        root.add(top, BorderLayout.NORTH);
+        root.add(header(), BorderLayout.NORTH);
         root.add(split, BorderLayout.CENTER);
-        root.add(exportPanel(), BorderLayout.SOUTH);
+        exportBar = exportPanel();
+        root.add(exportBar, BorderLayout.SOUTH);
         setContentPane(root);
         installDrop(root);
+        alignAllHeaders();
         loadPrefs();
-        setSize(1180, 780);
+        setMinimumSize(new Dimension(1080, 720));
+        setSize(1320, 860);
         setLocationRelativeTo(null);
-        updateButtons();
+        showSession();
+        addWindowListener(new WindowAdapter() {
+            @Override public void windowActivated(WindowEvent e) { recheckSystemTheme(); }
+        });
     }
 
     // ---------------------------------------------------------------------------------------- layout
@@ -128,139 +187,380 @@ final class Gui extends JFrame {
     private JMenuBar menu() {
         JMenuBar mb = new JMenuBar();
         JMenu f = new JMenu("File");
-        f.add(item("Open card / folder…", this::chooseSource));
-        f.add(item("Rescan", this::rescan));
+        f.add(item("Open card or folder…", Icons.Kind.FOLDER, this::chooseSource, KeyStroke.getKeyStroke("control O")));
+        f.add(item("Rescan", Icons.Kind.REFRESH, this::rescan, KeyStroke.getKeyStroke("F5")));
         f.addSeparator();
-        f.add(item("Exit", () -> System.exit(0)));
+        f.add(item("Exit", null, () -> System.exit(0), null));
         JMenu t = new JMenu("Tools");
-        t.add(item("Build card session from WAV/FLAC files (virtual soundcheck)…", this::buildDialog));
-        t.add(item("Combine selected recordings side by side (WING card A + B)", this::combineSelected));
-        t.add(item("Repair unfinalized recordings…", this::repairHeaders));
+        t.add(item("Build card session for virtual soundcheck…", Icons.Kind.FILE, this::buildDialog, null));
+        t.add(item("Combine selected recordings (WING card A + B)", Icons.Kind.COMBINE, this::combineSelected, null));
+        t.add(item("Repair unfinalized recordings…", Icons.Kind.WRENCH, this::repairHeaders, null));
         t.addSeparator();
-        t.add(item("Run self-test", this::selfTest));
+        t.add(item("Run self-test", null, this::selfTest, null));
+        JMenu v = new JMenu("View");
+        ButtonGroup grp = new ButtonGroup();
+        for (Theme.Mode m : Theme.Mode.values()) {
+            JRadioButtonMenuItem r = new JRadioButtonMenuItem(m.label, m == themeMode);
+            r.addActionListener(e -> switchTheme(m));
+            grp.add(r);
+            v.add(r);
+        }
         JMenu h = new JMenu("Help");
-        h.add(item("Command line usage", () -> {
+        h.add(item("Command line usage", null, () -> {
             JTextArea a = new JTextArea(Cli.USAGE);
             a.setEditable(false);
             a.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-            JOptionPane.showMessageDialog(this, new JScrollPane(a), "Command line", JOptionPane.PLAIN_MESSAGE);
-        }));
-        h.add(item("About", () -> JOptionPane.showMessageDialog(this, TITLE + "\nVersion " + Main.VERSION
-                + "\n\nhttps://github.com/Audbol/x32-wing-multitrack-tool", "About", JOptionPane.INFORMATION_MESSAGE)));
-        mb.add(f); mb.add(t); mb.add(h);
+            JScrollPane sp = new JScrollPane(a);
+            sp.setPreferredSize(new Dimension(760, 520));
+            JOptionPane.showMessageDialog(this, sp, "Command line", JOptionPane.PLAIN_MESSAGE);
+        }, null));
+        h.add(item("Project page", null, () -> browse("https://github.com/Audbol/x32-wing-multitrack-tool"), null));
+        h.addSeparator();
+        h.add(item("About", null, this::about, null));
+        mb.add(f); mb.add(t); mb.add(v); mb.add(h);
         return mb;
     }
 
-    private static JMenuItem item(String label, Runnable r) {
-        JMenuItem i = new JMenuItem(label);
+    private static JMenuItem item(String label, Icons.Kind icon, Runnable r, KeyStroke key) {
+        JMenuItem i = new JMenuItem(label, icon == null ? null : Icons.of(icon));
+        if (key != null) i.setAccelerator(key);
         i.addActionListener(e -> r.run());
         return i;
     }
 
-    private JComponent channelsTab() {
-        chTable.setRowHeight(22);
-        chTable.getColumnModel().getColumn(0).setMaxWidth(60);
-        chTable.getColumnModel().getColumn(1).setMaxWidth(50);
-        chTable.getColumnModel().getColumn(3).setMaxWidth(120);
-        chTable.getColumnModel().getColumn(4).setMaxWidth(110);
-        chTable.getColumnModel().getColumn(4).setCellRenderer(new LevelRenderer());
-        chTable.setFillsViewportHeight(true);
-
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
-        buttons.add(button("All", () -> setAll(true)));
-        buttons.add(button("None", () -> setAll(false)));
-        buttons.add(button("Analyze levels", this::analyze));
-        buttons.add(button("Select non-silent", this::selectNonSilent));
-        buttons.add(new JSeparator(SwingConstants.VERTICAL));
-        buttons.add(button("Import names (.scn / .snap / .txt)…", this::importNames));
-        buttons.add(button("Save names…", this::saveNames));
-        buttons.add(button("Recall last names", this::recallNames));
-
-        JPanel p = new JPanel(new BorderLayout());
-        p.add(new JScrollPane(chTable), BorderLayout.CENTER);
-        p.add(buttons, BorderLayout.SOUTH);
+    private JComponent header() {
+        JPanel p = new JPanel(new BorderLayout(12, 0));
+        p.setBorder(BorderFactory.createCompoundBorder(new MatteBorder(0, 0, 1, 0, Theme.border()), new EmptyBorder(10, 14, 10, 14)));
+        JButton open = new JButton("Open card or folder…", Icons.of(Icons.Kind.FOLDER));
+        open.addActionListener(e -> chooseSource());
+        JButton rescan = new JButton(Icons.of(Icons.Kind.REFRESH));
+        rescan.setToolTipText("Rescan (F5)");
+        rescan.addActionListener(e -> rescan());
+        open.setFocusable(false);
+        rescan.setFocusable(false);
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        left.setOpaque(false);
+        left.add(open); left.add(rescan);
+        left.add(Box.createHorizontalStrut(8));
+        sourceLabel.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+        left.add(sourceLabel);
+        p.add(left, BorderLayout.WEST);
+        busyDisabled.add(open); busyDisabled.add(rescan);
         return p;
     }
 
-    private JComponent markersTab() {
-        mkTable.setRowHeight(22);
-        JPanel north = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
-        north.add(new JLabel("Session name (max 15 chars):"));
-        north.add(sessionName);
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
-        buttons.add(button("Add marker…", this::addMarker));
-        buttons.add(button("Remove selected", this::removeMarkers));
-        buttons.add(button("Save name + markers to card (SE_LOG.BIN)", this::saveLog));
-        buttons.add(button("Export markers…", this::exportMarkers));
+    private JComponent sidebar() {
         JPanel p = new JPanel(new BorderLayout());
-        p.add(north, BorderLayout.NORTH);
-        p.add(new JScrollPane(mkTable), BorderLayout.CENTER);
-        p.add(buttons, BorderLayout.SOUTH);
+        p.setBackground(Theme.panelAlt());
+        JPanel head = new JPanel(new BorderLayout());
+        head.setOpaque(false);
+        head.setBorder(new EmptyBorder(14, 16, 6, 16));
+        JLabel cap = new JLabel("RECORDINGS");
+        cap.putClientProperty(FlatClientProperties.STYLE, "font: -2 bold; foreground: $Label.disabledForeground");
+        countLabel.putClientProperty(FlatClientProperties.STYLE, "font: -2 bold; foreground: $Label.disabledForeground");
+        head.add(cap, BorderLayout.WEST);
+        head.add(countLabel, BorderLayout.EAST);
+        sessionList.setCellRenderer(new SessionRenderer());
+        sessionList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        sessionList.setBackground(Theme.panelAlt());
+        sessionList.addListSelectionListener(e -> { if (!e.getValueIsAdjusting()) showSession(); });
+        JScrollPane sp = sidebarScroll;
+        sp.setBorder(null);
+        sp.getViewport().setBackground(Theme.panelAlt());
+        JLabel hint = sidebarTip;
+        hint.putClientProperty(FlatClientProperties.STYLE, "font: -1; foreground: $Label.disabledForeground");
+        hint.setBorder(new EmptyBorder(8, 16, 12, 16));
+        hint.setVisible(false);
+        p.add(head, BorderLayout.NORTH);
+        p.add(sp, BorderLayout.CENTER);
+        p.add(hint, BorderLayout.SOUTH);
+        p.setMinimumSize(new Dimension(240, 100));
         return p;
     }
 
-    private JButton button(String label, Runnable r) {
-        JButton b = new JButton(label);
+    private JComponent mainArea() {
+        main.add(emptyState(), "empty");
+        JPanel sess = new JPanel(new BorderLayout());
+        JPanel head = new JPanel(new GridBagLayout());
+        head.setBorder(new EmptyBorder(16, 20, 6, 20));
+        title.putClientProperty(FlatClientProperties.STYLE_CLASS, "h2");
+        subtitle.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+        chips.setOpaque(false);
+        GridBagConstraints g = new GridBagConstraints();
+        g.gridx = 0; g.anchor = GridBagConstraints.WEST; g.weightx = 1;
+        g.gridy = 0; head.add(title, g);
+        g.gridy = 1; g.insets = new Insets(2, 0, 0, 0); head.add(subtitle, g);
+        g.gridy = 2; g.insets = new Insets(10, -6, 0, 0); head.add(chips, g);
+        tabs.putClientProperty(FlatClientProperties.TABBED_PANE_TAB_INSETS, new Insets(0, 14, 0, 14));
+        tabs.setBorder(new EmptyBorder(0, 14, 0, 14));
+        tabs.addTab("Channels", channelsTab());
+        tabs.addTab("Markers", markersTab());
+        tabs.addTab("Details", detailsTab());
+        sess.add(head, BorderLayout.NORTH);
+        sess.add(tabs, BorderLayout.CENTER);
+        main.add(sess, "session");
+        return main;
+    }
+
+    private JComponent emptyState() {
+        JPanel p = new JPanel(new GridBagLayout());
+        GridBagConstraints g = new GridBagConstraints();
+        g.gridx = 0; g.insets = new Insets(6, 0, 6, 0);
+        java.net.URL icon = Gui.class.getResource("icon.png");
+        if (icon != null) p.add(new JLabel(new ImageIcon(new ImageIcon(icon).getImage().getScaledInstance(112, 112, Image.SCALE_SMOOTH))), g);
+        JLabel h = new JLabel("Open an X-Live or WING-LIVE recording");
+        h.putClientProperty(FlatClientProperties.STYLE_CLASS, "h2");
+        g.insets = new Insets(18, 0, 4, 0);
+        p.add(h, g);
+        JLabel s = new JLabel("<html><center>Insert the SD card and choose it, or drag the card, an X_LIVE folder<br>or a multichannel WAV file onto this window.</center></html>");
+        s.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground; font: +1");
+        g.insets = new Insets(0, 0, 18, 0);
+        p.add(s, g);
+        JButton open = new JButton("Open card or folder…", Icons.of(Icons.Kind.FOLDER));
+        open.setIcon(new Icons(Icons.Kind.FOLDER, 16, Color.WHITE));
+        open.putClientProperty(FlatClientProperties.STYLE,
+                "font: +1 bold; margin: 8,20,8,20; background: $Component.accentColor; foreground: #ffffff; borderWidth: 0; focusWidth: 0");
+        open.addActionListener(e -> chooseSource());
+        busyDisabled.add(open);
+        p.add(open, g);
+        return p;
+    }
+
+    private JButton toolButton(String label, Icons.Kind icon, String tip, Runnable r) {
+        JButton b = new JButton(label, icon == null ? null : Icons.of(icon));
+        b.putClientProperty(FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_TOOLBAR_BUTTON);
+        b.putClientProperty(FlatClientProperties.STYLE, "margin: 4,8,4,8");
+        if (tip != null) b.setToolTipText(tip);
         b.addActionListener(e -> r.run());
         busyDisabled.add(b);
         return b;
     }
 
+    private JComponent channelsTab() {
+        chTable.setFillsViewportHeight(true);
+        chTable.setShowGrid(false);
+        chTable.getTableHeader().setReorderingAllowed(false);
+        chTable.putClientProperty(FlatClientProperties.STYLE, "rowHeight: 28");
+        TableColumn c0 = chTable.getColumnModel().getColumn(0), c1 = chTable.getColumnModel().getColumn(1), c3 = chTable.getColumnModel().getColumn(3),
+                c4 = chTable.getColumnModel().getColumn(4);
+        c0.setMaxWidth(60); c0.setMinWidth(60);
+        c1.setMaxWidth(48); c1.setMinWidth(48);
+        c3.setMaxWidth(72); c3.setMinWidth(72);
+        c4.setMinWidth(220); c4.setPreferredWidth(260);
+        DefaultTableCellRenderer num = new DefaultTableCellRenderer();
+        num.setHorizontalAlignment(SwingConstants.CENTER);
+        c1.setCellRenderer(new MutedRenderer(SwingConstants.CENTER));
+        chTable.getColumnModel().getColumn(2).setCellRenderer(new NameRenderer());
+        c4.setCellRenderer(new MeterRenderer());
+
+        JPanel bar1 = new JPanel(new BorderLayout());
+        bar1.setBorder(new EmptyBorder(8, 4, 6, 4));
+        JPanel l = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        l.add(toolButton("All", Icons.Kind.CHECKS, "Tick every channel", () -> setAll(true)));
+        l.add(toolButton("None", Icons.Kind.CLEAR, "Untick every channel", () -> setAll(false)));
+        l.add(sep());
+        l.add(toolButton("Analyze levels", Icons.Kind.METER, "Measure the peak level of every channel", this::analyze));
+        l.add(toolButton("Select active", null, "Tick only channels with signal above the silence threshold", this::selectNonSilent));
+        JPanel r = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+        r.add(toolButton("Import names…", Icons.Kind.TAG, "From an X32/M32 scene (.scn), WING snapshot (.snap) or a text list", this::importNames));
+        r.add(toolButton("Save list…", Icons.Kind.SAVE, "Save the channel names to a text file", this::saveNames));
+        r.add(toolButton("Recall last", null, "Use the names from your last export", this::recallNames));
+        bar1.add(l, BorderLayout.WEST);
+        bar1.add(r, BorderLayout.EAST);
+
+        JScrollPane sp = new JScrollPane(chTable);
+        sp.putClientProperty(FlatClientProperties.STYLE, "arc: 10");
+        chSummary.putClientProperty(FlatClientProperties.STYLE, "font: -1; foreground: $Label.disabledForeground");
+        chSummary.setBorder(new EmptyBorder(6, 6, 8, 6));
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBorder(new EmptyBorder(4, 6, 0, 6));
+        p.add(bar1, BorderLayout.NORTH);
+        p.add(sp, BorderLayout.CENTER);
+        p.add(chSummary, BorderLayout.SOUTH);
+        return p;
+    }
+
+    /** Left-aligns table headers (FlatLaf centres them), except the given narrow columns. Re-run after a theme switch. */
+    private static void alignHeaders(JTable t, int... centered) {
+        TableCellRenderer base = t.getTableHeader().getDefaultRenderer();
+        if (base instanceof HeaderAlign) return;
+        t.getTableHeader().setDefaultRenderer(new HeaderAlign(base, centered));
+    }
+
+    private record HeaderAlign(TableCellRenderer base, int[] centered) implements TableCellRenderer {
+        public Component getTableCellRendererComponent(JTable t, Object v, boolean s, boolean f, int r, int c) {
+            Component comp = base.getTableCellRendererComponent(t, v, s, f, r, c);
+            int mc = t.convertColumnIndexToModel(c);
+            if (comp instanceof JLabel l) l.setHorizontalAlignment(Arrays.stream(centered).anyMatch(x -> x == mc) ? SwingConstants.CENTER : SwingConstants.LEADING);
+            return comp;
+        }
+    }
+
+    private void alignAllHeaders() {
+        alignHeaders(chTable, 0, 1, 3);
+        alignHeaders(mkTable, 0);
+        alignHeaders(takeTable);
+    }
+
+    private static JComponent sep() {
+        JSeparator s = new JSeparator(SwingConstants.VERTICAL);
+        s.setPreferredSize(new Dimension(9, 20));
+        return s;
+    }
+
+    private JComponent markersTab() {
+        mkTable.setFillsViewportHeight(true);
+        mkTable.setShowGrid(false);
+        mkTable.getColumnModel().getColumn(0).setMaxWidth(60);
+        mkTable.getColumnModel().getColumn(0).setCellRenderer(new MutedRenderer(SwingConstants.CENTER));
+        JPanel top = new JPanel(new BorderLayout());
+        top.setBorder(new EmptyBorder(10, 4, 8, 4));
+        JPanel nm = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        nm.add(new JLabel("Session name"));
+        sessionName.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "up to 15 characters");
+        nm.add(sessionName);
+        JPanel r = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+        r.add(toolButton("Add…", Icons.Kind.PLUS, "Add a marker at a time", this::addMarker));
+        r.add(toolButton("Remove", Icons.Kind.MINUS, "Remove the selected markers", this::removeMarkers));
+        r.add(sep());
+        r.add(toolButton("Export list…", Icons.Kind.EXPORT, "Save as CSV, or Audacity labels (.txt)", this::exportMarkers));
+        r.add(toolButton("Save to card", Icons.Kind.SAVE, "Write name and markers to SE_LOG.BIN (keeps a backup)", this::saveLog));
+        top.add(nm, BorderLayout.WEST);
+        top.add(r, BorderLayout.EAST);
+        JScrollPane sp = new JScrollPane(mkTable);
+        sp.putClientProperty(FlatClientProperties.STYLE, "arc: 10");
+        JLabel hint = new JLabel("Markers set on the console are read from the card. Use “Split at markers” in Export to get one folder per song.");
+        hint.putClientProperty(FlatClientProperties.STYLE, "font: -1; foreground: $Label.disabledForeground");
+        hint.setBorder(new EmptyBorder(6, 6, 8, 6));
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBorder(new EmptyBorder(4, 6, 0, 6));
+        p.add(top, BorderLayout.NORTH);
+        p.add(sp, BorderLayout.CENTER);
+        p.add(hint, BorderLayout.SOUTH);
+        return p;
+    }
+
+    private JComponent detailsTab() {
+        details.setBorder(new EmptyBorder(14, 10, 10, 10));
+        JTable takes = takeTable;
+        takes.setShowGrid(false);
+        takes.setFillsViewportHeight(true);
+        takes.getColumnModel().getColumn(3).setCellRenderer(new StatusRenderer());
+        JScrollPane sp = new JScrollPane(takes);
+        sp.putClientProperty(FlatClientProperties.STYLE, "arc: 10");
+        JLabel cap = new JLabel("TAKE FILES");
+        cap.putClientProperty(FlatClientProperties.STYLE, "font: -2 bold; foreground: $Label.disabledForeground");
+        cap.setBorder(new EmptyBorder(10, 4, 6, 4));
+        JPanel south = new JPanel(new BorderLayout());
+        south.add(cap, BorderLayout.NORTH);
+        south.add(sp, BorderLayout.CENTER);
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBorder(new EmptyBorder(4, 6, 8, 6));
+        p.add(details, BorderLayout.NORTH);
+        p.add(south, BorderLayout.CENTER);
+        return p;
+    }
+
     private JComponent exportPanel() {
-        JPanel p = new JPanel(new GridBagLayout());
-        p.setBorder(BorderFactory.createCompoundBorder(new EmptyBorder(4, 8, 8, 8), BorderFactory.createTitledBorder("Export")));
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(Theme.panelAlt());
+        p.setBorder(BorderFactory.createCompoundBorder(new MatteBorder(1, 0, 0, 0, Theme.border()), new EmptyBorder(12, 18, 14, 18)));
+
+        JPanel cols = new JPanel(new GridBagLayout());
+        cols.setOpaque(false);
         GridBagConstraints g = new GridBagConstraints();
-        g.insets = new Insets(3, 4, 3, 4);
-        g.anchor = GridBagConstraints.WEST;
+        g.anchor = GridBagConstraints.NORTHWEST;
+        g.insets = new Insets(0, 0, 0, 28);
+        g.gridy = 0;
 
-        JPanel r1 = row(new JLabel("Format"), format, dither, gap(), new JLabel("Range"), range, new JLabel("from"), rangeStart, new JLabel("to"), rangeEnd);
-        JPanel r2 = row(new JLabel("Normalize"), normalize, new JLabel("target peak"), normDb, new JLabel("dBFS"), gap(),
-                removeSilent, silentDb, new JLabel("dBFS peak"));
-        JButton browse = new JButton("Browse…");
+        g.gridx = 0; cols.add(section("FORMAT", row(format), row(dither)), g);
+        normDb.setPreferredSize(new Dimension(74, normDb.getPreferredSize().height));
+        silentDb.setPreferredSize(new Dimension(74, silentDb.getPreferredSize().height));
+        g.gridx = 1; cols.add(section("PROCESSING", row(new JLabel("Normalize"), normalize, normDb, muted("dBFS")),
+                row(removeSilent, silentDb, muted("dBFS"))), g);
+        g.gridx = 2; cols.add(section("RANGE", row(range), row(muted("from"), rangeStart, muted("to"), rangeEnd)), g);
+        JButton browse = new JButton(Icons.of(Icons.Kind.FOLDER));
+        browse.setToolTipText("Choose output folder");
         browse.addActionListener(e -> chooseOut());
-        JButton openOut = new JButton("Open");
-        openOut.addActionListener(e -> openFolder(Path.of(outDir.getText())));
-        JPanel r3 = row(new JLabel("Output folder"), outDir, browse, openOut, gap(), reaper, markerFiles);
+        JButton openOut = new JButton(Icons.of(Icons.Kind.EXPORT));
+        openOut.setToolTipText("Open output folder");
+        openOut.addActionListener(e -> openFolder(Path.of(outDir.getText().trim())));
+        g.gridx = 3; g.weightx = 1; g.insets = new Insets(0, 0, 0, 0);
+        cols.add(section("OUTPUT", row(outDir, browse, openOut), row(reaper, markerFiles)), g);
 
+        quickBtn.putClientProperty(FlatClientProperties.STYLE,
+                "background: $Component.accentColor; foreground: #ffffff; font: bold; margin: 7,18,7,18; borderWidth: 0; focusWidth: 0;"
+                        + "disabledBackground: fade($Component.accentColor,40%); disabledText: #ffffffcc");
+        quickBtn.setToolTipText("Every channel of the selected recording(s) to its own dithered 16-bit FLAC. Normalize and silent-channel settings apply.");
+        exportBtn.putClientProperty(FlatClientProperties.STYLE, "margin: 7,14,7,14");
+        exportBtn.setToolTipText("Export the ticked channels with the settings above");
+        cancelBtn.putClientProperty(FlatClientProperties.STYLE, "margin: 7,14,7,14");
         exportBtn.addActionListener(e -> export(false));
         quickBtn.addActionListener(e -> export(true));
-        quickBtn.setFont(quickBtn.getFont().deriveFont(Font.BOLD));
-        quickBtn.setToolTipText("Every channel of the selected recording(s) to its own 16-bit FLAC (dithered). Normalize / remove-silent settings above apply.");
-        exportBtn.setToolTipText("Export the ticked channels with the settings above.");
         cancelBtn.addActionListener(e -> cancel = true);
-        cancelBtn.setEnabled(false);
-        bar.setStringPainted(true);
-        bar.setString("");
-        bar.setPreferredSize(new Dimension(260, 22));
-        JPanel r4 = row(quickBtn, exportBtn, bar, cancelBtn, status);
+        bar.putClientProperty(FlatClientProperties.STYLE, "arc: 999");
+        bar.setPreferredSize(new Dimension(220, 6));
+        status.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+
+        JPanel progress = new JPanel(new GridBagLayout());
+        progress.setOpaque(false);
+        GridBagConstraints q = new GridBagConstraints();
+        q.gridx = 0; q.anchor = GridBagConstraints.WEST; q.fill = GridBagConstraints.HORIZONTAL; q.weightx = 1;
+        q.gridy = 0; progress.add(status, q);
+        q.gridy = 1; q.insets = new Insets(6, 0, 0, 120); progress.add(bar, q);
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(cancelBtn); buttons.add(exportBtn); buttons.add(quickBtn);
+        JPanel actions = new JPanel(new BorderLayout(16, 0));
+        actions.setOpaque(false);
+        actions.setBorder(new EmptyBorder(14, 0, 0, 0));
+        actions.add(progress, BorderLayout.CENTER);
+        actions.add(buttons, BorderLayout.EAST);
+
+        p.add(cols, BorderLayout.CENTER);
+        p.add(actions, BorderLayout.SOUTH);
 
         normDb.setToolTipText("Peak level every file is normalized to");
         silentDb.setToolTipText("Channels whose loudest peak stays below this are treated as unused and not exported");
         removeSilent.setToolTipText(silentDb.getToolTipText());
-        normalize.setToolTipText("Each file: every track peaks at the target. All files, same gain: the loudest track hits the target and the mix balance is kept.");
+        normalize.setToolTipText("Each file: every track peaks at the target. All files, same gain: the loudest track hits the target and the balance is kept.");
+        rangeStart.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "0:00");
         range.addActionListener(e -> updateButtons());
         normalize.addActionListener(e -> updateButtons());
-        removeSilent.addActionListener(e -> { updateButtons(); chTable.repaint(); });
-        silentDb.addChangeListener(e -> chTable.repaint());
+        removeSilent.addActionListener(e -> { updateButtons(); chTable.repaint(); updateSummary(); });
+        silentDb.addChangeListener(e -> { chTable.repaint(); updateSummary(); });
         format.addActionListener(e -> updateButtons());
         busyDisabled.addAll(List.of(format, dither, range, rangeStart, rangeEnd, normalize, normDb, removeSilent, silentDb, outDir, browse,
                 reaper, markerFiles, exportBtn, quickBtn));
-
-        g.gridx = 0; g.fill = GridBagConstraints.HORIZONTAL; g.weightx = 1;
-        g.gridy = 0; p.add(r1, g);
-        g.gridy = 1; p.add(r2, g);
-        g.gridy = 2; p.add(r3, g);
-        g.gridy = 3; p.add(r4, g);
         return p;
+    }
+
+    private static JComponent section(String caption, JComponent... rows) {
+        JPanel s = new JPanel(new GridBagLayout());
+        s.setOpaque(false);
+        GridBagConstraints g = new GridBagConstraints();
+        g.gridx = 0; g.anchor = GridBagConstraints.WEST; g.fill = GridBagConstraints.HORIZONTAL; g.weightx = 1;
+        JLabel c = new JLabel(caption);
+        c.putClientProperty(FlatClientProperties.STYLE, "font: -2 bold; foreground: $Label.disabledForeground");
+        g.gridy = 0; g.insets = new Insets(0, 2, 6, 0); s.add(c, g);
+        for (int i = 0; i < rows.length; i++) { g.gridy = i + 1; g.insets = new Insets(0, 0, 6, 0); s.add(rows[i], g); }
+        return s;
     }
 
     private static JPanel row(JComponent... cs) {
         JPanel r = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        for (JComponent c : cs) r.add(c);
+        r.setOpaque(false);
+        r.setBorder(new EmptyBorder(0, -6, 0, 0));
+        for (JComponent c : cs) { c.setOpaque(c instanceof JCheckBox ? false : c.isOpaque()); r.add(c); }
         return r;
     }
 
-    private static JComponent gap() { return (JComponent) Box.createHorizontalStrut(16); }
+    private static JLabel muted(String t) {
+        JLabel l = new JLabel(t);
+        l.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+        return l;
+    }
 
     private void installDrop(JComponent c) {
         c.setTransferHandler(new TransferHandler() {
@@ -275,6 +575,53 @@ final class Gui extends JFrame {
                 } catch (Exception e) { return false; }
             }
         });
+    }
+
+    // ---------------------------------------------------------------------------------------- theme
+
+    private void switchTheme(Theme.Mode m) {
+        themeMode = m;
+        prefs.put("theme", m.name());
+        reapplyTheme();
+    }
+
+    private void reapplyTheme() {
+        Theme.apply(themeMode);
+        FlatLaf.updateUI();
+        restyle();
+    }
+
+    /** Colors set directly (not via UIManager keys) must be refreshed after a theme switch. */
+    private void restyle() {
+        Color alt = Theme.panelAlt();
+        sessionList.setBackground(alt);
+        sidebarScroll.setBorder(null);
+        sidebarScroll.getViewport().setBackground(alt);
+        for (Component c : getContentPane().getComponents()) restyleBorders(c);
+        alignAllHeaders();
+        repaint();
+    }
+
+    private void restyleBorders(Component c) {
+        if (c instanceof JComponent j) {
+            if (j.getBorder() instanceof javax.swing.border.CompoundBorder cb && cb.getOutsideBorder() instanceof MatteBorder mb) {
+                Insets i = mb.getBorderInsets(j);
+                j.setBorder(BorderFactory.createCompoundBorder(new MatteBorder(i.top, i.left, i.bottom, i.right, Theme.border()), cb.getInsideBorder()));
+                if (i.top > 0) j.setBackground(Theme.panelAlt()); // export bar
+            }
+            if (j instanceof JSplitPane sp && sp.getLeftComponent() instanceof JPanel side) side.setBackground(Theme.panelAlt());
+            for (Component k : j.getComponents()) restyleBorders(k);
+        }
+    }
+
+    private void recheckSystemTheme() {
+        if (themeMode != Theme.Mode.SYSTEM) return;
+        Thread t = new Thread(() -> {
+            boolean d = Theme.systemIsDark();
+            if (d != Theme.isDark()) SwingUtilities.invokeLater(this::reapplyTheme);
+        }, "theme-check");
+        t.setDaemon(true);
+        t.start();
     }
 
     // ---------------------------------------------------------------------------------------- prefs
@@ -305,8 +652,6 @@ final class Gui extends JFrame {
 
     // ---------------------------------------------------------------------------------------- sources
 
-    private Path lastSource;
-
     private void chooseSource() {
         JFileChooser fc = new JFileChooser(prefs.get("lastDir", null));
         fc.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES);
@@ -320,22 +665,29 @@ final class Gui extends JFrame {
     private void rescan() { if (lastSource != null) scan(lastSource); }
 
     private void scan(Path p) {
-        lastSource = p;
-        sourceLabel.setText(p.toString());
         runTask("Scanning", pr -> {
             List<String> warn = new ArrayList<>();
             List<Session> found = Session.scan(p, warn);
             SwingUtilities.invokeLater(() -> {
-                sessions.clear();
-                selection.clear();
-                for (Session s : found) sessions.addElement(s);
+                showSessions(p, found);
                 if (!found.isEmpty()) sessionList.setSelectedIndex(0);
-                else showSession();
-                status.setText(found.size() + " recording(s) found" + (warn.isEmpty() ? "" : ", " + warn.size() + " warning(s)"));
+                status.setText(found.isEmpty() ? "No recordings found in " + p : found.size() + " recording(s) found" + (warn.isEmpty() ? "" : " · " + warn.size() + " warning(s)"));
                 if (!warn.isEmpty()) JOptionPane.showMessageDialog(this, String.join("\n", warn.subList(0, Math.min(15, warn.size()))),
                         "Scan warnings", JOptionPane.WARNING_MESSAGE);
             });
         });
+    }
+
+    private void showSessions(Path p, List<Session> found) {
+        lastSource = p;
+        sourceLabel.setText(Util.shortPath(p) + (found.isEmpty() ? "" : "   ·   " + found.size() + (found.size() == 1 ? " recording" : " recordings")));
+        sourceLabel.setToolTipText(p.toString());
+        sessions.clear();
+        selection.clear();
+        for (Session s : found) sessions.addElement(s);
+        countLabel.setText(found.isEmpty() ? "" : String.valueOf(found.size()));
+        sidebarTip.setVisible(found.size() >= 2);
+        showSession();
     }
 
     private Session current() { return sessionList.getSelectedValue(); }
@@ -353,39 +705,99 @@ final class Gui extends JFrame {
         if (chTable.isEditing()) chTable.getCellEditor().stopCellEditing();
         chModel.set(s);
         mkModel.set(s);
-        sessionName.setText(s == null ? "" : s.name);
-        sessionName.setEnabled(s != null && s.isCardSession());
-        info.setText(s == null ? "" : describe(s));
-        info.setCaretPosition(0);
+        takeModel.set(s);
+        mainCards.show(main, s == null ? "empty" : "session");
+        if (exportBar != null) exportBar.setVisible(!sessions.isEmpty());
         if (s != null) {
+            title.setText(s.name == null || s.name.isBlank() ? (s.date != null ? "Recording " + s.id : s.id) : s.name);
+            String when = s.date == null ? "" : s.date.format(DateTimeFormatter.ofPattern("EEEE d MMMM yyyy · HH:mm", Locale.ENGLISH));
+            String kind = !s.parts.isEmpty() ? "Combined recording" : s.isCardSession() ? "Card session " + Util.shortPath(s.dir) : "WAV file " + s.id;
+            subtitle.setText((when.isEmpty() ? "" : when + "   ·   ") + kind);
+            subtitle.setToolTipText(String.valueOf(s.dir));
+            chips.removeAll();
+            chips.add(chip(s.channels + " channels"));
+            chips.add(chip(Session.khz(s.sampleRate)));
+            chips.add(chip(s.formatLabel));
+            chips.add(chip(Util.hms(s.seconds())));
+            chips.add(chip(Util.bytes(s.totalBytes())));
+            int nt = s.takes.size() + s.parts.stream().mapToInt(x -> x.takes.size()).sum();
+            chips.add(chip(nt + (nt == 1 ? " file" : " files")));
+            chips.add(chip(s.markers.size() + (s.markers.size() == 1 ? " marker" : " markers")));
+            if (!s.parts.isEmpty()) chips.add(chip("combined", Theme.WARN));
+            if (s.anyBrokenHeaders()) chips.add(chip("unfinalized", Theme.WARN));
+            chips.revalidate();
+            chips.repaint();
+            sessionName.setText(s.name);
+            sessionName.setEnabled(s.isCardSession());
             rangeEnd.setText(Util.hms(s.seconds()));
-            setTitle(TITLE + " — " + s.label());
-        }
+            fillDetails(s);
+            setTitle(APP + " — " + s.label());
+        } else setTitle(APP);
+        updateSummary();
         updateButtons();
     }
 
-    private static String describe(Session s) {
-        StringBuilder b = new StringBuilder();
-        b.append("Recording:    ").append(s.label()).append('\n');
-        b.append("Location:     ").append(s.dir).append('\n');
-        b.append("Type:         ").append(!s.parts.isEmpty() ? "Combined (" + s.parts.size() + " recordings side by side)"
-                : s.isCardSession() ? "X-Live / WING-LIVE card session (SE_LOG.BIN)" : "Multichannel WAV").append('\n');
-        b.append("Format:       ").append(s.channels).append(" channels, ").append(s.sampleRate).append(" Hz, ").append(s.formatLabel).append('\n');
-        b.append("Length:       ").append(Util.hmsMillis(s.seconds())).append("  (").append(s.frames).append(" samples)\n");
-        b.append("Size:         ").append(Util.bytes(s.totalBytes())).append('\n');
-        b.append("Markers:      ").append(s.markers.size()).append('\n');
-        if (s.log != null) {
-            b.append("Session id:   ").append(String.format("%08X", s.log.sessionId)).append('\n');
-            b.append("Log length:   ").append(s.log.totalFrames).append(" samples, ").append(s.log.numTakes).append(" take(s)\n");
-        }
-        b.append('\n');
-        List<WavFile> takes = new ArrayList<>(s.takes);
-        for (Session p : s.parts) takes.addAll(p.takes);
-        for (WavFile w : takes)
-            b.append(String.format(Locale.ROOT, "  %-40s %10s  %s%s%n", w.path.getFileName(), Util.bytes(w.fileSize), Util.hms(w.frames() / (double) w.sampleRate),
-                    w.headerBroken ? "   UNFINALIZED HEADER (readable; Tools > Repair to fix for other software)" : ""));
-        return b.toString();
+    private JComponent chip(String text) { return chip(text, null); }
+
+    private JComponent chip(String text, Color tint) {
+        JLabel l = new JLabel(text) {
+            @Override protected void paintComponent(Graphics g0) {
+                Graphics2D g = (Graphics2D) g0.create();
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                Color fg = tint != null ? tint : UIManager.getColor("Label.foreground");
+                g.setColor(new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), Theme.isDark() ? 34 : 22));
+                g.fillRoundRect(0, 0, getWidth(), getHeight(), getHeight(), getHeight());
+                g.dispose();
+                super.paintComponent(g0);
+            }
+        };
+        l.putClientProperty(FlatClientProperties.STYLE, "font: -1" + (tint != null ? "; foreground: #" + Integer.toHexString(tint.getRGB() & 0xFFFFFF) : ""));
+        l.setBorder(new EmptyBorder(3, 10, 3, 10));
+        return l;
     }
+
+    private void fillDetails(Session s) {
+        details.removeAll();
+        String[][] rows = {
+                {"Recording", s.label()},
+                {"Location", String.valueOf(s.dir)},
+                {"Type", !s.parts.isEmpty() ? "Combined (" + s.parts.size() + " recordings side by side)"
+                        : s.isCardSession() ? "X-Live / WING-LIVE card session" : "Multichannel WAV file"},
+                {"Audio", s.channels + " channels · " + s.sampleRate + " Hz · " + s.formatLabel},
+                {"Length", Util.hmsMillis(s.seconds()) + "   (" + String.format(Locale.ROOT, "%,d", s.frames) + " samples)"},
+                {"Size", Util.bytes(s.totalBytes())},
+                {"Session id", s.log == null ? "—" : String.format("%08X", s.log.sessionId)},
+        };
+        GridBagConstraints g = new GridBagConstraints();
+        g.anchor = GridBagConstraints.WEST;
+        for (int i = 0; i < rows.length; i++) {
+            g.gridy = i;
+            g.gridx = 0; g.insets = new Insets(3, 0, 3, 24); g.weightx = 0;
+            details.add(muted(rows[i][0]), g);
+            g.gridx = 1; g.weightx = 1; g.insets = new Insets(3, 0, 3, 0);
+            JLabel v = new JLabel(rows[i][1]);
+            details.add(v, g);
+        }
+        details.revalidate();
+        details.repaint();
+    }
+
+    private void updateSummary() {
+        Session s = current();
+        if (s == null) { chSummary.setText(" "); return; }
+        boolean[][] v = sel(s);
+        int ticked = 0, pairs = 0, active = 0;
+        for (int c = 0; c < s.channels; c++) {
+            if (v[0][c]) ticked++;
+            if (v[1][c]) pairs++;
+            if (s.peaks != null && Util.db(s.peaks[c]) >= silentThreshold()) active++;
+        }
+        String lv = s.peaks == null ? "Levels not analyzed yet. Click Analyze levels to see which inputs were used."
+                : active + " of " + s.channels + " channels have signal above " + (int) silentThreshold() + " dBFS.";
+        chSummary.setText(ticked + " of " + s.channels + " channels ticked" + (pairs > 0 ? " · " + pairs + " stereo pair(s)" : "") + "   ·   " + lv);
+    }
+
+    private double silentThreshold() { return ((Number) silentDb.getValue()).doubleValue(); }
 
     // ---------------------------------------------------------------------------------------- channel actions
 
@@ -394,6 +806,7 @@ final class Gui extends JFrame {
         if (s == null) return;
         Arrays.fill(sel(s)[0], v);
         chModel.fireTableDataChanged();
+        updateSummary();
     }
 
     private void analyze() {
@@ -401,7 +814,7 @@ final class Gui extends JFrame {
         if (s == null) return;
         runTask("Analyzing", pr -> {
             s.peaks = ExportJob.analyzeSession(s, pr);
-            SwingUtilities.invokeLater(() -> { chModel.fireTableDataChanged(); status.setText("Levels analyzed"); });
+            SwingUtilities.invokeLater(() -> { chModel.fireTableDataChanged(); updateSummary(); status.setText("Levels analyzed"); });
         });
     }
 
@@ -409,12 +822,13 @@ final class Gui extends JFrame {
         Session s = current();
         if (s == null) return;
         if (s.peaks == null) { analyzeThen(this::selectNonSilent); return; }
-        double thr = ((Number) silentDb.getValue()).doubleValue();
+        double thr = silentThreshold();
         boolean[] e = sel(s)[0];
         int on = 0;
         for (int c = 0; c < s.channels; c++) { e[c] = Util.db(s.peaks[c]) >= thr; if (e[c]) on++; }
         chModel.fireTableDataChanged();
-        status.setText(on + " of " + s.channels + " channels have signal above " + thr + " dBFS");
+        updateSummary();
+        status.setText(on + " of " + s.channels + " channels have signal above " + (int) thr + " dBFS");
     }
 
     private void analyzeThen(Runnable after) {
@@ -486,6 +900,7 @@ final class Gui extends JFrame {
             s.markers.add(m);
             s.markers.sort(null);
             mkModel.fireTableDataChanged();
+            showSession();
         } catch (RuntimeException e) { error("Invalid time", e); }
     }
 
@@ -495,6 +910,7 @@ final class Gui extends JFrame {
         int[] rows = mkTable.getSelectedRows();
         for (int i = rows.length - 1; i >= 0; i--) s.markers.remove(mkTable.convertRowIndexToModel(rows[i]));
         mkModel.fireTableDataChanged();
+        showSession();
     }
 
     private void saveLog() {
@@ -508,6 +924,7 @@ final class Gui extends JFrame {
         try {
             s.saveLog();
             sessionList.repaint();
+            showSession();
             status.setText("Saved " + s.logPath);
         } catch (IOException e) { error("Could not write SE_LOG.BIN", e); }
     }
@@ -522,7 +939,7 @@ final class Gui extends JFrame {
         try {
             if (p.toString().toLowerCase().endsWith(".txt")) Exports.writeAudacityLabels(p, s.markers, s.sampleRate);
             else Exports.writeMarkersCsv(p, s.markers, s.sampleRate);
-            status.setText("Markers written to " + p.getFileName() + " (.txt = Audacity labels, otherwise CSV)");
+            status.setText("Markers written to " + p.getFileName());
         } catch (IOException e) { error("Could not write markers", e); }
     }
 
@@ -565,7 +982,7 @@ final class Gui extends JFrame {
                 sp.normalize = (ExportJob.Normalize) normalize.getSelectedItem();
                 sp.normalizeDb = ((Number) normDb.getValue()).doubleValue();
                 sp.removeSilent = removeSilent.isSelected();
-                sp.silentDb = ((Number) silentDb.getValue()).doubleValue();
+                sp.silentDb = silentThreshold();
                 sp.range = quick ? ExportJob.Range.WHOLE : switch (range.getSelectedIndex()) {
                     case 1 -> ExportJob.Range.SPLIT_AT_MARKERS; case 2 -> ExportJob.Range.CUSTOM; default -> ExportJob.Range.WHOLE; };
                 if (sp.range == ExportJob.Range.CUSTOM) {
@@ -598,6 +1015,7 @@ final class Gui extends JFrame {
 
     private void exportDone(List<ExportJob.Spec> specs, List<ExportJob.Result> results) {
         chModel.fireTableDataChanged();
+        updateSummary();
         StringBuilder b = new StringBuilder();
         long in = 0, out = 0; double sec = 0, audio = 0; int files = 0, skipped = 0;
         for (int i = 0; i < results.size(); i++) {
@@ -609,7 +1027,7 @@ final class Gui extends JFrame {
                 audio / Math.max(0.01, sec)));
         if (skipped > 0) b.append(skipped).append(" silent track(s) skipped:\n");
         for (ExportJob.Result r : results) for (String s : r.skippedSilent.subList(0, Math.min(40, r.skippedSilent.size()))) b.append("   ").append(s).append('\n');
-        status.setText(files + " files written");
+        status.setText(files + " files written to " + specs.get(0).outDir);
         Path dir = specs.get(0).outDir;
         Object[] opts = {"Open folder", "Close"};
         if (JOptionPane.showOptionDialog(this, b.toString(), "Export finished", JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE,
@@ -623,6 +1041,20 @@ final class Gui extends JFrame {
         } catch (Exception e) { error("Could not open folder", e); }
     }
 
+    private void browse(String url) {
+        try { Desktop.getDesktop().browse(java.net.URI.create(url)); } catch (Exception e) { error("Could not open browser", e); }
+    }
+
+    private void about() {
+        JPanel p = new JPanel(new BorderLayout(18, 0));
+        java.net.URL icon = Gui.class.getResource("icon.png");
+        if (icon != null) p.add(new JLabel(new ImageIcon(new ImageIcon(icon).getImage().getScaledInstance(72, 72, Image.SCALE_SMOOTH))), BorderLayout.WEST);
+        JLabel t = new JLabel("<html><b style='font-size:13px'>" + APP + "</b><br>Version " + Main.VERSION
+                + "<br><br>Multitrack tool for Behringer X-Live and WING-LIVE recordings.<br>MIT licensed · github.com/Audbol/x32-wing-multitrack-tool</html>");
+        p.add(t, BorderLayout.CENTER);
+        JOptionPane.showMessageDialog(this, p, "About", JOptionPane.PLAIN_MESSAGE);
+    }
+
     // ---------------------------------------------------------------------------------------- tools
 
     private void combineSelected() {
@@ -630,6 +1062,7 @@ final class Gui extends JFrame {
         try {
             Session c = Session.combine(chosen);
             sessions.addElement(c);
+            countLabel.setText(String.valueOf(sessions.size()));
             sessionList.setSelectedValue(c, true);
             status.setText("Combined " + chosen.size() + " recordings into " + c.channels + " channels");
         } catch (IOException e) {
@@ -676,9 +1109,23 @@ final class Gui extends JFrame {
         JDialog d = new JDialog(this, "Build card session (virtual soundcheck)", true);
         DefaultListModel<Path> files = new DefaultListModel<>();
         JList<Path> list = new JList<>(files);
-        JTextField name = new JTextField(15), markers = new JTextField(30), out = new JTextField(prefs.get("buildOut", outDir.getText()), 30);
-        JButton add = new JButton("Add files…"), remove = new JButton("Remove"), up = new JButton("Up"), down = new JButton("Down"), sort = new JButton("Sort by name");
-        JButton browse = new JButton("Browse…"), build = new JButton("Build");
+        list.setCellRenderer(new DefaultListCellRenderer() {
+            @Override public Component getListCellRendererComponent(JList<?> l, Object v, int i, boolean s, boolean f) {
+                JLabel c = (JLabel) super.getListCellRendererComponent(l, v, i, s, f);
+                Path p = (Path) v;
+                c.setText(String.format("%2d   %s", i + 1, p.getFileName()));
+                c.setToolTipText(p.toString());
+                c.setIcon(Icons.of(Icons.Kind.FILE));
+                c.setBorder(new EmptyBorder(3, 8, 3, 8));
+                return c;
+            }
+        });
+        JTextField name = new JTextField(15), markers = new JTextField(28), out = new JTextField(prefs.get("buildOut", outDir.getText()), 28);
+        name.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "optional, up to 15 characters");
+        markers.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "e.g. 3:20, 7:45.5");
+        JButton add = new JButton("Add files…", Icons.of(Icons.Kind.PLUS)), remove = new JButton("Remove", Icons.of(Icons.Kind.MINUS));
+        JButton up = new JButton("Move up"), down = new JButton("Move down"), sort = new JButton("Sort by name");
+        JButton browse = new JButton(Icons.of(Icons.Kind.FOLDER)), build = new JButton("Build session"), close = new JButton("Cancel");
         add.addActionListener(e -> {
             JFileChooser fc = new JFileChooser(prefs.get("buildIn", null));
             fc.setMultiSelectionEnabled(true);
@@ -701,6 +1148,7 @@ final class Gui extends JFrame {
             fc.setDialogTitle("Output: the SD card root, or any folder (an X_LIVE folder is created inside)");
             if (fc.showOpenDialog(d) == JFileChooser.APPROVE_OPTION) out.setText(fc.getSelectedFile().getPath());
         });
+        close.addActionListener(e -> d.dispose());
         build.addActionListener(e -> {
             if (files.isEmpty()) return;
             List<Path> in = new ArrayList<>(); for (int i = 0; i < files.size(); i++) in.add(files.get(i));
@@ -725,25 +1173,36 @@ final class Gui extends JFrame {
 
         JPanel fileButtons = new JPanel(new GridBagLayout());
         GridBagConstraints g = new GridBagConstraints();
-        g.gridx = 0; g.fill = GridBagConstraints.HORIZONTAL; g.insets = new Insets(2, 2, 2, 2);
+        g.gridx = 0; g.fill = GridBagConstraints.HORIZONTAL; g.insets = new Insets(0, 0, 6, 0);
         for (JButton b : List.of(add, remove, up, down, sort)) fileButtons.add(b, g);
-        JPanel center = new JPanel(new BorderLayout(6, 6));
-        center.add(new JLabel("<html>Files in channel order (mono, stereo or multichannel WAV/FLAC, all 44.1 or all 48 kHz, up to 32 channels).<br>"
-                + "Channels are padded with silence to 8, 16 or 32.</html>"), BorderLayout.NORTH);
-        center.add(new JScrollPane(list), BorderLayout.CENTER);
+        JLabel intro = new JLabel("<html>Add WAV or FLAC files in channel order: mono, stereo or multichannel, all at 44.1 kHz or all at 48 kHz, up to 32 channels.<br>"
+                + "Channels are padded with silence to 8, 16 or 32, and the result plays from the card like a normal recording.</html>");
+        intro.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+        JPanel center = new JPanel(new BorderLayout(10, 10));
+        center.add(intro, BorderLayout.NORTH);
+        JScrollPane sp = new JScrollPane(list);
+        sp.putClientProperty(FlatClientProperties.STYLE, "arc: 10");
+        center.add(sp, BorderLayout.CENTER);
         center.add(fileButtons, BorderLayout.EAST);
-        JPanel south = new JPanel(new GridBagLayout());
-        g = new GridBagConstraints(); g.insets = new Insets(3, 3, 3, 3); g.anchor = GridBagConstraints.WEST;
-        g.gridy = 0; south.add(new JLabel("Session name"), g); south.add(name, g);
-        g.gridy = 1; south.add(new JLabel("Markers (e.g. 3:20, 7:45.5)"), g); south.add(markers, g);
-        g.gridy = 2; south.add(new JLabel("Output folder"), g); south.add(out, g); south.add(browse, g);
-        g.gridy = 3; south.add(build, g);
-        JPanel root = new JPanel(new BorderLayout(6, 6));
-        root.setBorder(new EmptyBorder(10, 10, 10, 10));
+        JPanel form = new JPanel(new GridBagLayout());
+        g = new GridBagConstraints(); g.insets = new Insets(4, 0, 4, 10); g.anchor = GridBagConstraints.WEST;
+        g.gridy = 0; form.add(muted("Session name"), g); form.add(name, g);
+        g.gridy = 1; form.add(muted("Markers"), g); form.add(markers, g);
+        g.gridy = 2; form.add(muted("Output folder"), g); form.add(out, g); form.add(browse, g);
+        build.putClientProperty(FlatClientProperties.STYLE, "font: bold; margin: 6,16,6,16");
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        btns.add(close); btns.add(build);
+        JPanel south = new JPanel(new BorderLayout());
+        south.setBorder(new EmptyBorder(12, 0, 0, 0));
+        south.add(form, BorderLayout.CENTER);
+        south.add(btns, BorderLayout.SOUTH);
+        JPanel root = new JPanel(new BorderLayout());
+        root.setBorder(new EmptyBorder(16, 18, 16, 18));
         root.add(center, BorderLayout.CENTER);
         root.add(south, BorderLayout.SOUTH);
         d.setContentPane(root);
-        d.setSize(720, 520);
+        d.getRootPane().setDefaultButton(build);
+        d.setSize(820, 600);
         d.setLocationRelativeTo(this);
         d.setVisible(true);
     }
@@ -758,7 +1217,8 @@ final class Gui extends JFrame {
         cancel = false;
         updateButtons();
         bar.setValue(0);
-        bar.setString(what + "…");
+        bar.setIndeterminate(true);
+        status.setText(what + "…");
         long start = System.nanoTime();
         ExportJob.Progress pr = new ExportJob.Progress() {
             long last;
@@ -769,9 +1229,9 @@ final class Gui extends JFrame {
                 double el = (now - start) / 1e9;
                 String eta = f > 0.01 && f < 1 ? " · " + Util.hms(el / f - el) + " left" : "";
                 SwingUtilities.invokeLater(() -> {
+                    bar.setIndeterminate(false);
                     bar.setValue((int) (f * 1000));
-                    bar.setString(String.format(Locale.ROOT, "%.0f%%", f * 100));
-                    status.setText(stage + (detail.isEmpty() ? "" : " · " + detail) + eta);
+                    status.setText(String.format(Locale.ROOT, "%s · %.0f%%", stage, f * 100) + (detail.isEmpty() ? "" : " · " + detail) + eta);
                 });
             }
             public boolean cancelled() { return cancel; }
@@ -782,12 +1242,12 @@ final class Gui extends JFrame {
             } catch (InterruptedIOException e) {
                 SwingUtilities.invokeLater(() -> status.setText("Cancelled"));
             } catch (Exception e) {
-                SwingUtilities.invokeLater(() -> error(what + " failed", e));
+                SwingUtilities.invokeLater(() -> { status.setText(what + " failed"); error(what + " failed", e); });
             } finally {
                 SwingUtilities.invokeLater(() -> {
                     busy = false;
+                    bar.setIndeterminate(false);
                     bar.setValue(0);
-                    bar.setString("");
                     updateButtons();
                 });
             }
@@ -798,7 +1258,8 @@ final class Gui extends JFrame {
 
     private void updateButtons() {
         for (JComponent c : busyDisabled) c.setEnabled(!busy);
-        cancelBtn.setEnabled(busy);
+        cancelBtn.setVisible(busy);
+        bar.setVisible(busy);
         boolean any = current() != null;
         exportBtn.setEnabled(!busy && any);
         quickBtn.setEnabled(!busy && any);
@@ -820,7 +1281,7 @@ final class Gui extends JFrame {
 
     private final class ChannelModel extends AbstractTableModel {
         private Session s;
-        private final String[] cols = {"Export", "#", "Name", "Stereo w/ next", "Peak"};
+        private final String[] cols = {"Export", "#", "Name", "Stereo", "Peak level"};
         void set(Session s) { this.s = s; fireTableDataChanged(); }
         public int getRowCount() { return s == null ? 0 : s.channels; }
         public int getColumnCount() { return cols.length; }
@@ -833,7 +1294,7 @@ final class Gui extends JFrame {
                 case 1 -> r + 1;
                 case 2 -> s.channelNames[r];
                 case 3 -> sel(s)[1][r];
-                default -> s.peaks == null ? "" : Util.dbLabel(s.peaks[r]);
+                default -> s.peaks == null ? null : s.peaks[r];
             };
         }
         @Override public void setValueAt(Object v, int r, int c) {
@@ -848,53 +1309,173 @@ final class Gui extends JFrame {
                 }
                 default -> { }
             }
+            updateSummary();
         }
     }
 
-    private final class LevelRenderer extends DefaultTableCellRenderer {
-        @Override
-        public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean focus, int row, int col) {
-            Component c = super.getTableCellRendererComponent(t, v, sel, focus, row, col);
+    private static final class MutedRenderer extends DefaultTableCellRenderer {
+        MutedRenderer(int align) { setHorizontalAlignment(align); }
+        @Override public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean f, int r, int c) {
+            super.getTableCellRendererComponent(t, v, sel, false, r, c);
+            if (!sel) setForeground(Theme.muted());
+            return this;
+        }
+    }
+
+    private final class NameRenderer extends DefaultTableCellRenderer {
+        @Override public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean f, int r, int c) {
+            super.getTableCellRendererComponent(t, v, sel, false, r, c);
             Session s = current();
-            setHorizontalAlignment(RIGHT);
-            if (!sel && s != null && s.peaks != null && row < s.peaks.length) {
-                double d = Util.db(s.peaks[row]);
-                c.setForeground(d < ((Number) silentDb.getValue()).doubleValue() ? Color.GRAY : d > -0.5 ? new Color(200, 0, 0) : new Color(0, 120, 0));
-            } else if (!sel) c.setForeground(t.getForeground());
-            return c;
+            setIcon(null);
+            if (s != null) {
+                boolean[][] st = sel(s);
+                if (st[1][r] && r + 1 < s.channels) { setIcon(Icons.of(Icons.Kind.LINK)); setToolTipText("Exported as one stereo file with channel " + (r + 2)); }
+                else if (r > 0 && st[1][r - 1]) { setIcon(Icons.of(Icons.Kind.LINK)); setToolTipText("Right side of stereo pair " + r + "-" + (r + 1)); }
+                else setToolTipText(null);
+                if (!sel && !st[0][r]) setForeground(Theme.muted());
+            }
+            setIconTextGap(6);
+            return this;
+        }
+    }
+
+    /** Peak meter: bar scaled -60..0 dBFS, colored by level, greyed below the silence threshold. */
+    private final class MeterRenderer extends JComponent implements TableCellRenderer {
+        private Long peak;
+        private boolean selected;
+        private Color bg, fg;
+
+        MeterRenderer() { setOpaque(false); }
+
+        @Override public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean f, int r, int c) {
+            peak = (Long) v;
+            selected = sel;
+            fg = sel ? t.getSelectionForeground() : t.getForeground();
+            bg = null;
+            return this;
+        }
+
+        @Override protected void paintComponent(Graphics g0) {
+            Graphics2D g = (Graphics2D) g0.create();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_LCD_HRGB);
+            int h = getHeight(), textW = 70, barW = Math.max(40, getWidth() - textW - 18), bh = 6, y = (h - bh) / 2;
+            Color track = new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 28);
+            g.setColor(track);
+            g.fillRoundRect(8, y, barW, bh, bh, bh);
+            String label;
+            Color lc = selected ? fg : Theme.muted();
+            if (peak == null) {
+                label = "—";
+            } else {
+                double db = Util.db(peak);
+                boolean silent = db < silentThreshold();
+                label = Double.isInfinite(db) ? "silent" : String.format(Locale.ROOT, "%.1f dB", db);
+                double frac = Double.isInfinite(db) ? 0 : Math.max(0, Math.min(1, (db + 60) / 60.0));
+                Color col = silent ? Theme.muted() : db > -1 ? Theme.HOT : db > -6 ? Theme.WARN : Theme.GOOD;
+                g.setColor(col);
+                int w = (int) Math.round(barW * frac);
+                if (w > 0) g.fillRoundRect(8, y, Math.max(bh, w), bh, bh, bh);
+                if (!silent && !selected) lc = fg;
+            }
+            g.setFont(getFont() != null ? getFont() : UIManager.getFont("Table.font"));
+            g.setFont(UIManager.getFont("Table.font").deriveFont(UIManager.getFont("Table.font").getSize2D() - 1f));
+            g.setColor(lc);
+            java.awt.FontMetrics fm = g.getFontMetrics();
+            g.drawString(label, getWidth() - 10 - fm.stringWidth(label), (h + fm.getAscent() - fm.getDescent()) / 2);
+            g.dispose();
         }
     }
 
     private final class MarkerModel extends AbstractTableModel {
         private Session s;
-        private final String[] cols = {"#", "Time", "Sample"};
+        private final String[] cols = {"#", "Time", "Sample position"};
         void set(Session s) { this.s = s; fireTableDataChanged(); }
         public int getRowCount() { return s == null ? 0 : s.markers.size(); }
         public int getColumnCount() { return 3; }
         @Override public String getColumnName(int c) { return cols[c]; }
         public Object getValueAt(int r, int c) {
             long m = s.markers.get(r);
-            return switch (c) { case 0 -> r + 1; case 1 -> Util.hmsMillis(m / (double) s.sampleRate); default -> m; };
+            return switch (c) { case 0 -> r + 1; case 1 -> Util.hmsMillis(m / (double) s.sampleRate); default -> String.format(Locale.ROOT, "%,d", m); };
+        }
+    }
+
+    private static final class TakeModel extends AbstractTableModel {
+        private final List<WavFile> rows = new ArrayList<>();
+        private final String[] cols = {"File", "Size", "Length", "Status"};
+        void set(Session s) {
+            rows.clear();
+            if (s != null) { rows.addAll(s.takes); for (Session p : s.parts) rows.addAll(p.takes); }
+            fireTableDataChanged();
+        }
+        public int getRowCount() { return rows.size(); }
+        public int getColumnCount() { return cols.length; }
+        @Override public String getColumnName(int c) { return cols[c]; }
+        public Object getValueAt(int r, int c) {
+            WavFile w = rows.get(r);
+            return switch (c) {
+                case 0 -> w.path.getParent().getFileName() + File.separator + w.path.getFileName();
+                case 1 -> Util.bytes(w.fileSize);
+                case 2 -> Util.hms(w.frames() / (double) w.sampleRate);
+                default -> w.headerBroken ? "Unfinalized (readable; Tools › Repair fixes it for other software)" : "OK";
+            };
+        }
+    }
+
+    private static final class StatusRenderer extends DefaultTableCellRenderer {
+        @Override public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean f, int r, int c) {
+            super.getTableCellRendererComponent(t, v, sel, false, r, c);
+            if (!sel) setForeground("OK".equals(v) ? Theme.GOOD : Theme.WARN);
+            return this;
         }
     }
 
     private static final class SessionRenderer extends JPanel implements ListCellRenderer<Session> {
-        private final JLabel title = new JLabel(), sub = new JLabel();
-        SessionRenderer() {
-            super(new BorderLayout());
-            setBorder(new EmptyBorder(4, 6, 4, 6));
-            title.setFont(title.getFont().deriveFont(Font.BOLD));
-            sub.setFont(sub.getFont().deriveFont(11f));
-            add(title, BorderLayout.NORTH);
-            add(sub, BorderLayout.SOUTH);
+        private final JLabel name = new JLabel(), meta = new JLabel(), when = new JLabel(), badge = new JLabel();
+        private Color tile;
+
+        @Override protected void paintComponent(Graphics g0) {
+            if (tile == null) return;
+            Graphics2D g = (Graphics2D) g0.create();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setColor(tile);
+            g.fillRoundRect(8, 2, getWidth() - 16, getHeight() - 4, 12, 12);
+            g.dispose();
         }
+
+        SessionRenderer() {
+            super(new BorderLayout(0, 2));
+            setBorder(new EmptyBorder(10, 20, 10, 20));
+            name.putClientProperty(FlatClientProperties.STYLE, "font: +1 bold");
+            meta.putClientProperty(FlatClientProperties.STYLE, "font: -1");
+            when.putClientProperty(FlatClientProperties.STYLE, "font: -1");
+            badge.putClientProperty(FlatClientProperties.STYLE, "font: -2 bold");
+            JPanel top = new JPanel(new BorderLayout(8, 0));
+            top.setOpaque(false);
+            top.add(name, BorderLayout.CENTER);
+            top.add(badge, BorderLayout.EAST);
+            JPanel bottom = new JPanel(new BorderLayout());
+            bottom.setOpaque(false);
+            bottom.add(when, BorderLayout.NORTH);
+            bottom.add(meta, BorderLayout.SOUTH);
+            add(top, BorderLayout.NORTH);
+            add(bottom, BorderLayout.CENTER);
+        }
+
         public Component getListCellRendererComponent(JList<? extends Session> l, Session s, int i, boolean sel, boolean focus) {
-            title.setText(s.label() + (s.anyBrokenHeaders() ? "  ⚠" : ""));
-            sub.setText(s.summary() + (s.markers.isEmpty() ? "" : " · " + s.markers.size() + " markers"));
-            setBackground(sel ? l.getSelectionBackground() : l.getBackground());
-            title.setForeground(sel ? l.getSelectionForeground() : l.getForeground());
-            sub.setForeground(sel ? l.getSelectionForeground() : Color.GRAY);
-            setOpaque(true);
+            name.setText(s.name == null || s.name.isBlank() ? (s.date != null ? "Recording " + s.id : s.id) : s.name);
+            when.setText(s.date == null ? String.valueOf(s.dir) : s.date.format(DateTimeFormatter.ofPattern("EEE d MMM yyyy · HH:mm", Locale.ENGLISH)));
+            meta.setText(s.channels + " ch · " + Session.khz(s.sampleRate) + " · " + Util.hms(s.seconds()) + " · " + Util.bytes(s.totalBytes())
+                    + (s.markers.isEmpty() ? "" : " · " + s.markers.size() + " markers"));
+            badge.setText(s.anyBrokenHeaders() ? "UNFINALIZED" : !s.parts.isEmpty() ? "COMBINED" : "");
+            Color fg = sel ? l.getSelectionForeground() : l.getForeground();
+            Color mutedC = sel ? new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 200) : Theme.muted();
+            name.setForeground(fg);
+            when.setForeground(mutedC);
+            meta.setForeground(mutedC);
+            badge.setForeground(sel ? fg : Theme.WARN);
+            tile = sel ? l.getSelectionBackground() : null;
+            setOpaque(false);
             return this;
         }
     }
